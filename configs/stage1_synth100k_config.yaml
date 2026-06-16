@@ -1,0 +1,107 @@
+﻿dataset:
+  name: MANTRA-Synth100k
+  version: v1
+  total_images: 100000
+  train_images: 80000
+  val_images: 10000
+  test_images: 10000
+  random_seed: 42
+
+paths:
+  raw_text_dir: data/stage1_synthetic/text/raw
+  cleaned_text_dir: data/stage1_synthetic/text/cleaned
+  generated_text_dir: data/stage1_synthetic/text/generated
+  font_dir: data/stage1_synthetic/fonts
+  image_dir: data/stage1_synthetic/images
+  label_dir: data/stage1_synthetic/labels
+  metadata_dir: data/stage1_synthetic/metadata
+  report_dir: data/stage1_synthetic/reports
+
+composition:
+  natural_text_lines: 70000
+  coverage_lines: 15000
+  sanskrit_danda_lines: 5000
+  historical_admin_lines: 5000
+  names_dates_numeral_lines: 5000
+
+line_length_distribution:
+  short:
+    min_chars: 10
+    max_chars: 25
+    ratio: 0.10
+  medium:
+    min_chars: 26
+    max_chars: 60
+    ratio: 0.55
+  long:
+    min_chars: 61
+    max_chars: 100
+    ratio: 0.30
+  very_long:
+    min_chars: 101
+    max_chars: 130
+    ratio: 0.05
+
+rendering:
+  preferred_renderer: pango_cairo_harfbuzz
+  fallback_renderer: pil_raqm
+  min_fonts: 10
+  target_fonts: 20
+  font_size_min: 28
+  font_size_max: 52
+
+font_split:
+  use_font_aware_split: true
+  heldout_val_fonts: 2
+  heldout_test_fonts: 2
+
+source_split:
+  use_source_aware_split: true
+  heldout_val_sources_ratio: 0.10
+  heldout_test_sources_ratio: 0.10
+
+degradation_distribution:
+  D0_clean_print: 0.20
+  D1_light_scan: 0.30
+  D2_low_contrast_faded_ink: 0.15
+  D3_uneven_background: 0.15
+  D4_broken_strokes: 0.05
+  D5_noisy_archive_scan: 0.07
+  D6_blurred_scan: 0.05
+  D7_old_paper_texture: 0.03
+
+coverage_targets:
+  basic_consonant_min_occurrences: 1000
+  common_matra_min_occurrences: 5000
+  common_conjunct_min_occurrences: 2000
+  danda_min_occurrences: 10000
+  double_danda_min_occurrences: 2000
+  devanagari_digit_min_occurrences: 1000
+  anusvara_min_occurrences: 5000
+  chandrabindu_min_occurrences: 1000
+  visarga_min_occurrences: 2000
+
+important_conjuncts:
+  - क्ष
+  - त्र
+  - ज्ञ
+  - श्र
+  - द्ध
+  - द्व
+  - द्य
+  - ह्म
+  - स्त्र
+  - क्त्य
+  - प्र
+  - ब्र
+  - भ्र
+  - ग्र
+  - क्र
+
+quality_control:
+  generate_sample_grids: true
+  inspect_random_train_samples: 100
+  inspect_random_val_samples: 50
+  inspect_random_test_samples: 50
+  inspect_rare_conjunct_samples: 100
+  inspect_high_degradation_samples: 50

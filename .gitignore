@@ -1,0 +1,35 @@
+﻿# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+env/
+
+# Large dataset outputs
+data/stage1_synthetic/images/
+data/stage1_synthetic/fonts/
+data/stage1_synthetic/text/raw/
+data/stage1_synthetic/text/cleaned/
+data/stage1_synthetic/text/generated/
+data/stage1_synthetic/labels/*.csv
+data/stage1_synthetic/metadata/
+data/stage1_synthetic/reports/
+
+# Keep important template files
+!data/stage1_synthetic/README.md
+!data/stage1_synthetic/corpus_manifest.csv
+
+# Models and outputs
+models/
+outputs/
+checkpoints/
+*.pt
+*.pth
+*.ckpt
+*.onnx
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

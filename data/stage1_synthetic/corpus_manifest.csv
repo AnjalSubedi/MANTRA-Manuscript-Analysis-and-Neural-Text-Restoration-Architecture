@@ -1,0 +1,9 @@
+﻿source_id,file_path,language,domain,title,source_url_or_reference,license_status,split_group,notes
+nepali_001,data/stage1_synthetic/text/raw/nepali_001.txt,nepali,prose,,,,train,
+nepali_002,data/stage1_synthetic/text/raw/nepali_002.txt,nepali,prose,,,,train,
+old_nepali_001,data/stage1_synthetic/text/raw/old_nepali_001.txt,nepali,historical,,,,val,
+sanskrit_001,data/stage1_synthetic/text/raw/sanskrit_001.txt,sanskrit,verse,,,,train,
+sanskrit_002,data/stage1_synthetic/text/raw/sanskrit_002.txt,sanskrit,religious,,,,test,
+hindi_001,data/stage1_synthetic/text/raw/hindi_001.txt,hindi,prose,,,,train,
+coverage_001,data/stage1_synthetic/text/generated/coverage_001.txt,generated,coverage,Manual conjunct coverage,MANTRA generated,own,train,
+names_dates_001,data/stage1_synthetic/text/generated/names_dates_001.txt,generated,names_dates,Manual names dates numerals,MANTRA generated,own,train,
