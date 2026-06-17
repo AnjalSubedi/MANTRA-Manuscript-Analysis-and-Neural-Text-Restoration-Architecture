@@ -1,9 +1,13 @@
 ﻿source_id,file_path,language,domain,title,source_url_or_reference,license_status,split_group,notes
-nepali_001,data/stage1_synthetic/text/raw/nepali_001.txt,nepali,prose,,,,train,
-nepali_002,data/stage1_synthetic/text/raw/nepali_002.txt,nepali,prose,,,,train,
-old_nepali_001,data/stage1_synthetic/text/raw/old_nepali_001.txt,nepali,historical,,,,val,
-sanskrit_001,data/stage1_synthetic/text/raw/sanskrit_001.txt,sanskrit,verse,,,,train,
-sanskrit_002,data/stage1_synthetic/text/raw/sanskrit_002.txt,sanskrit,religious,,,,test,
-hindi_001,data/stage1_synthetic/text/raw/hindi_001.txt,hindi,prose,,,,train,
-coverage_001,data/stage1_synthetic/text/generated/coverage_001.txt,generated,coverage,Manual conjunct coverage,MANTRA generated,own,train,
-names_dates_001,data/stage1_synthetic/text/generated/names_dates_001.txt,generated,names_dates,Manual names dates numerals,MANTRA generated,own,train,
+historical_nepali_001,data/stage1_synthetic/text/raw/nepal_ko_itihas_peshal_dahal.txt,nepali,historical,Nepal Ko Itihas by Peshal Dahal,Internet Archive,check_before_redistribution,train,GOOD_OCR readable_Devanagari_historical_prose useful_for_natural_text_lines
+historical_nepali_002,data/stage1_synthetic/text/raw/devmala_vamshavali.txt,nepali,historical,Devmala Vamshavali,Internet Archive,check_before_redistribution,train,GOOD_MEDIUM_OCR historical_religious_chronicle_style useful_for_old_Nepali_and_Sanskritic_patterns
+historical_nepali_003,data/stage1_synthetic/text/raw/bhasha_vamshavali_1.txt,nepali,historical,Bhasha Vamshavali 1,Internet Archive,check_before_redistribution,val,MEDIUM_OCR some_noisy_lines_but_valuable_vamshavali_content_keep_for_validation_diversity
+nepali_literary_001,data/stage1_synthetic/text/raw/bhanubhakta_ramayan.txt,nepali,religious,Bhanubhakta Ramayan,Internet Archive,check_before_redistribution,train,pending_collection useful_for_verse_and_danda_patterns
+nepali_literary_002,data/stage1_synthetic/text/raw/muna_madan.txt,nepali,verse,Muna Madan,Internet Archive,check_before_redistribution,train,pending_collection useful_for_Nepali_literary_lines
+sanskrit_001,data/stage1_synthetic/text/raw/bhagavad_gita_sanskrit.txt,sanskrit,verse,Bhagavad Gita Sanskrit,Wikisource_or_Internet_Archive,check_license,train,pending_collection useful_for_visarga_danda_and_Sanskrit_compounds
+sanskrit_002,data/stage1_synthetic/text/raw/sanskrit_stotra_001.txt,sanskrit,religious,Sanskrit Stotra Collection,Wikisource_or_other_open_source,check_license,val,pending_collection useful_for_religious_Sanskrit_patterns
+hindi_001,data/stage1_synthetic/text/raw/hindi_public_domain_001.txt,hindi,prose,Hindi Public Domain Text,Wikisource_or_Project_Gutenberg,check_license,train,pending_collection optional_script_diversity_source
+coverage_001,data/stage1_synthetic/text/generated/coverage_conjuncts_001.txt,generated,coverage,Manual Conjunct Coverage,MANTRA_generated,own,train,pending_generation rare_conjuncts_ksha_tra_gya_shra_etc
+coverage_002,data/stage1_synthetic/text/generated/coverage_matras_001.txt,generated,coverage,Manual Matra Coverage,MANTRA_generated,own,train,pending_generation matra_anusvara_chandrabindu_visarga_halant_coverage
+names_dates_001,data/stage1_synthetic/text/generated/names_dates_numerals_001.txt,generated,names_dates,Manual Names Dates Numerals,MANTRA_generated,own,train,pending_generation dates_names_places_Devanagari_digits
+historical_admin_001,data/stage1_synthetic/text/generated/historical_admin_style_001.txt,generated,administrative,Manual Historical Admin Style,MANTRA_generated,own,test,pending_generation historical_administrative_style_lines
