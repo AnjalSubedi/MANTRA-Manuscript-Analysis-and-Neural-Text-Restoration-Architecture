@@ -33,3 +33,11 @@ checkpoints/
 Thumbs.db
 .vscode/
 .idea/
+
+# Final synthetic dataset image directories
+data/stage1_synthetic/images_core_merged/
+data/stage1_synthetic/images_digits_only/
+data/stage1_synthetic/images_stage1_all_topup/
+data/stage1_synthetic/images_stage1_all_variant1_coverage_only/
+data/stage1_synthetic/images_stage1_all_variant1_missing_core/
+data/stage1_synthetic/images_stage1_all_variant2/

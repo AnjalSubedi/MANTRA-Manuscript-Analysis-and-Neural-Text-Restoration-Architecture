@@ -1,4 +1,4 @@
-﻿dataset:
+dataset:
   name: MANTRA-Synth100k
   version: v1
   total_images: 100000
@@ -43,12 +43,16 @@ line_length_distribution:
     ratio: 0.05
 
 rendering:
-  preferred_renderer: pango_cairo_harfbuzz
-  fallback_renderer: pil_raqm
+  preferred_renderer: chromium
+  fallback_renderer: chromium
   min_fonts: 10
   target_fonts: 20
   font_size_min: 28
   font_size_max: 52
+  padding_min: 15
+  padding_max: 35
+  max_rotation: 1.5
+  format: PNG
 
 font_split:
   use_font_aware_split: true
@@ -60,15 +64,35 @@ source_split:
   heldout_val_sources_ratio: 0.10
   heldout_test_sources_ratio: 0.10
 
+degradation_mode:
+  single_profile_prob: 0.70
+  composed_profile_prob: 0.30
+
 degradation_distribution:
-  D0_clean_print: 0.20
-  D1_light_scan: 0.30
-  D2_low_contrast_faded_ink: 0.15
-  D3_uneven_background: 0.15
+  D0_clean_print: 0.085
+  D1_light_scan: 0.10
+  D2_low_contrast_faded_ink: 0.08
+  D3_uneven_background: 0.07
   D4_broken_strokes: 0.05
-  D5_noisy_archive_scan: 0.07
+  D5_noisy_archive_scan: 0.05
   D6_blurred_scan: 0.05
-  D7_old_paper_texture: 0.03
+  D7_old_paper_texture: 0.05
+  D8_old_scan_soft: 0.07
+  D9_faded_gray_ink: 0.06
+  D10_noisy_scan_crop: 0.04
+  D11_mild_warped_line: 0.03
+  D12_dark_thick_scan: 0.03
+  D13_washed_out_faint_manuscript: 0.025
+  D14_low_dpi_compressed_scan: 0.035
+  D15_bleedthrough_archival: 0.025
+  D16_ink_bleed_spread: 0.025
+  D17_local_stain_shadow: 0.025
+  D18_fold_crease_damage: 0.02
+  D19_weak_shirorekha_dropout: 0.015
+  D20_partial_erosion_thin_strokes: 0.015
+  D21_mixed_manuscript_hard: 0.02
+  D22_reverse_showthrough_soft: 0.015
+  D23_fragmented_scan_crop: 0.015
 
 coverage_targets:
   basic_consonant_min_occurrences: 1000
