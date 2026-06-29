@@ -1,0 +1,21 @@
+# Stage 2 HTR data loading configuration for MANTRA-Synth100k
+# Used by: src/stage2_htr/dataset.py, src/stage2_htr/inspect_dataset.py
+
+dataset:
+  image_height: 64
+  max_width: null          # null = unlimited; set integer to skip over-wide samples
+  invert_image: false      # if true, invert grayscale so text=white bg=black
+  pixel_range: [0.0, 1.0]
+  augment: false           # no augmentation in Phase 2.3
+
+paths:
+  manifest_train: data/stage2_htr/manifests/htr_train.csv
+  manifest_val:   data/stage2_htr/manifests/htr_val.csv
+  manifest_test:  data/stage2_htr/manifests/htr_test.csv
+  manifest_all:   data/stage2_htr/manifests/htr_all.csv
+  charset_json:   data/stage2_htr/vocab/charset_synth100k.json
+
+dataloader:
+  batch_size: 16
+  num_workers: 4
+  pin_memory: false        # CPU-only for now
