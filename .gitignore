@@ -1,4 +1,4 @@
-﻿# Python
+# Python
 __pycache__/
 *.pyc
 .venv/
@@ -33,4 +33,10 @@ checkpoints/
 Thumbs.db
 .vscode/
 .idea/
+
+# Stage 2 HTR artifacts
+data/stage2_htr/manifests/
+data/stage2_htr/reports/
+data/stage2_htr/vocab/
+outputs/stage2_htr/
 
