@@ -10,13 +10,13 @@ MANTRA-Synth100k generates **100,000 synthetic Devanagari line images** with cor
 
 ```mermaid
 graph TD
-    A[Raw Text Corpus] --> B[Text Cleaning & Normalization]
-    B --> C[Stage 1: Chromium Text Renderer]
-    C --> D[Controlled Degradation Profiles]
-    D --> E[MANTRA-Synth100k Dataset (100k PNGs)]
-    E --> F[Stage 2: HTR Manifest Generation]
-    F --> G[QA Verification Gates]
-    G --> H[Final Training Split Manifests]
+    A["Raw Text Corpus"] --> B["Text Cleaning & Normalization"]
+    B --> C["Stage 1: Chromium Text Renderer"]
+    C --> D["Controlled Degradation Profiles"]
+    D --> E["MANTRA-Synth100k Dataset (100k PNGs)"]
+    E --> F["Stage 2: HTR Manifest Generation"]
+    F --> G["QA Verification Gates"]
+    G --> H["Final Training Split Manifests"]
 ```
 
 1. **Stage 1: Synthetic Dataset Generation**
