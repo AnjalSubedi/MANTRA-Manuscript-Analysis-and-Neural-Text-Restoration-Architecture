@@ -10,15 +10,29 @@ from PIL import Image
 # Add src to python path
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-from stage1_dataset.render_text_line import render_text_line
+from stage1_dataset.render_text_line import render_text_line, check_font_supports_text
 from stage1_dataset.degradation_profiles import apply_degradation
 from stage1_dataset.generate_synthetic_images import calculate_readability_metrics, normalize_devanagari_text, FONTS_TO_DOWNLOAD
+from stage1_dataset.font_policy import configured_font_splits, font_is_allowed, font_split_errors
 
 METADATA_DIR = "data/stage1_synthetic/metadata"
 LABEL_DIR = "data/stage1_synthetic/labels"
 IMAGE_DIR = "data/stage1_synthetic"
 
 def main():
+    with open("configs/stage1_synth100k_config.yaml", encoding="utf-8") as stream:
+        active_config = yaml.safe_load(stream)
+    fonts_by_split = configured_font_splits(active_config)
+    # A completed, valid generation or repair must not be overwritten by
+    # assembling older metadata fragments left on disk.
+    active_metadata = active_config["paths"].get("final_metadata", os.path.join(METADATA_DIR, "synthetic_image_metadata_stage1_all_final.csv"))
+    if os.path.exists(active_metadata):
+        with open(active_metadata, encoding="utf-8") as stream:
+            active_rows = list(csv.DictReader(stream))
+        if (len(active_rows) == 100000 and not font_split_errors(active_rows, active_config)
+                and all(os.path.isfile(row["image_path"]) for row in active_rows)):
+            print("Final dataset already contains 100,000 valid samples with disjoint fonts.")
+            return
     print("=" * 70)
     print("FINALIZING METADATA AND ADJUSTING TO EXACTLY 100,000 IMAGES (INSTANT)")
     print("=" * 70)
@@ -107,6 +121,11 @@ def main():
     combined.extend(topup)
     
     current_count = len(combined)
+    if font_split_errors(combined, active_config):
+        raise RuntimeError(
+            "Legacy metadata contains fonts from other splits. Run "
+            "repair_font_splits.py on the final metadata or regenerate with generate_final_dataset.py."
+        )
     print(f"Total rows currently: {current_count}")
     
     if current_count < 100000:
@@ -149,19 +168,24 @@ def main():
             split = row["split"]
             text = normalize_devanagari_text(row["text"])
             
-            # Select font supporting the text
+            # Select a font supporting the text within this sample's split.
             font_cmaps = {}
-            actual_font_path = available_fonts[0]
+            actual_font_path = None
             from fontTools.ttLib import TTFont
-            for font_path in available_fonts:
+            for font_path in fonts_by_split[split]:
+                if not check_font_supports_text(font_path, text):
+                    continue
                 try:
-                    font_cmaps[font_path] = TTFont(font_path).getBestCmap()
+                    with TTFont(font_path) as font:
+                        font_cmaps[font_path] = font.getBestCmap()
                     cmap = font_cmaps[font_path]
                     if all(char in (' ', '\n', '\r', '\t', '\u200c', '\u200d') or ord(char) in cmap for char in text):
                         actual_font_path = font_path
                         break
                 except Exception:
                     continue
+            if actual_font_path is None:
+                raise ValueError(f"No allowed {split} font covers {line_id}")
             
             font_size = rng.randint(config["rendering"]["font_size_min"], config["rendering"]["font_size_max"])
             padding = rng.randint(config["rendering"]["padding_min"], config["rendering"]["padding_max"])
@@ -175,6 +199,8 @@ def main():
                 padding_y=padding,
                 renderer_preference="chromium"
             )
+            if render_status != "success":
+                raise RuntimeError(f"Could not render {line_id}: {status_reason}")
             
             # Apply degradation
             degraded_img, deg_params = apply_degradation(
@@ -185,15 +211,15 @@ def main():
                 attempt=0
             )
             
-            save_dir = os.path.join(IMAGE_DIR, "images_stage1_all_topup", split)
+            save_dir = os.path.join(IMAGE_DIR, "images/stage1_all_topup", split)
             os.makedirs(save_dir, exist_ok=True)
             
             img_filename = f"{line_id}_extra_{i}_v03.png"
-            img_relative_path = os.path.join(IMAGE_DIR, "images_stage1_all_topup", split, img_filename)
+            img_relative_path = os.path.join(save_dir, img_filename)
             degraded_img.save(img_relative_path, "PNG")
             
             rec = {
-                "image_path": f"data/stage1_synthetic/images_stage1_all_topup/{split}/{img_filename}",
+                "image_path": Path(img_relative_path).as_posix(),
                 "line_id": line_id,
                 "source_id": source_id,
                 "source_file": source_file,
@@ -251,6 +277,8 @@ def main():
         print("PASS: All 100,000 files physically exist.")
         
     # Save final unified metadata CSV (including QA columns)
+    if len(combined) != 100000 or not_exists or font_split_errors(combined, active_config):
+        raise RuntimeError("Finalization failed QA. Repair legacy font splits with repair_font_splits.py")
     final_meta_csv = os.path.join(METADATA_DIR, "synthetic_image_metadata_stage1_all_final.csv")
     fieldnames = [
         "image_path", "line_id", "source_id", "source_file", "domain", "split", "text",
@@ -260,10 +288,12 @@ def main():
         "requested_font_name", "actual_font_name", "missing_glyphs", "variant_index", "generation_round",
         "font_name", "readability_score_estimate"
     ]
-    with open(final_meta_csv, "w", encoding="utf-8", newline="") as f:
+    temporary_metadata = Path(final_meta_csv).with_suffix(".tmp")
+    with temporary_metadata.open("w", encoding="utf-8", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(combined)
+    temporary_metadata.replace(final_meta_csv)
     print(f"Saved final metadata to {final_meta_csv}")
     
     # Close browser

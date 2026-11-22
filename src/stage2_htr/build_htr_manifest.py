@@ -6,22 +6,26 @@ import argparse
 import re
 import random
 import multiprocessing
+from pathlib import Path
 from collections import Counter
 from PIL import Image
+import yaml
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from stage1_dataset.font_policy import font_split_errors
+from stage1_dataset.label_quality import load_approvals, needs_review, evaluation_character_gaps
 
 def process_row_worker(item):
     """Processes a single row image validation. Executed in worker processes."""
     r, helper_info = item
-    image_path = r.get("image_path", "").strip()
-    text = r.get("text", "")
-    split = r.get("split", "").strip()
-    line_id = r.get("line_id", "").strip()
-    
-    if not image_path or not split or not line_id:
-        return {"status": "error", "error": "missing_required_column"}
+    image_path = (r.get("image_path") or "").strip()
+    text = r.get("text") or ""
+    split = (r.get("split") or "").strip().lower()
+    line_id = (r.get("line_id") or "").strip()
+    missing_required = not image_path or not split or not line_id
         
-    exists = os.path.exists(image_path)
-    is_blank = not text
+    exists = os.path.isfile(image_path)
+    is_blank = not text.strip()
     
     # Regex inspections
     has_ascii_digit = bool(re.search(r'[0-9]', text))
@@ -30,26 +34,23 @@ def process_row_worker(item):
     bad_ocr_pattern = re.compile(r'[_|&%€$£₹«»\[\]]')
     has_bad_ocr = bool(bad_ocr_pattern.search(text))
     
-    # Resolve width and height
-    # Refinement: Prefer width and height from metadata if already present
-    width = r.get("width", "").strip()
-    height = r.get("height", "").strip()
-    
-    if not width or not height:
-        if exists:
-            try:
-                with Image.open(image_path) as img:
-                    width, height = img.size
-            except Exception:
-                width, height = "", ""
-        else:
-            width, height = "", ""
+    # Decode pixels even when dimensions already exist in metadata: PNG
+    # headers alone cannot establish that an image will load during training.
+    width, height = "", ""
+    unreadable = False
+    if exists:
+        try:
+            with Image.open(image_path) as img:
+                img.load()
+                width, height = img.size
+        except (OSError, ValueError):
+            unreadable = True
             
     # Resolve flags
-    has_digit = r.get("has_digit", "").strip()
-    has_danda = r.get("has_danda", "").strip()
-    has_double_danda = r.get("has_double_danda", "").strip()
-    has_conjunct = r.get("has_conjunct", "").strip()
+    has_digit = (r.get("has_digit") or "").strip()
+    has_danda = (r.get("has_danda") or "").strip()
+    has_double_danda = (r.get("has_double_danda") or "").strip()
+    has_conjunct = (r.get("has_conjunct") or "").strip()
     
     if not has_digit:
         has_digit = helper_info.get("has_digit", "")
@@ -73,6 +74,9 @@ def process_row_worker(item):
             
     return {
         "status": "ok",
+        "missing_required": missing_required,
+        "unreadable": unreadable,
+        "invalid_split": split not in ("train", "val", "test"),
         "image_path": image_path,
         "text": text,
         "split": split,
@@ -80,7 +84,7 @@ def process_row_worker(item):
         "source_id": r.get("source_id", ""),
         "source_file": r.get("source_file", ""),
         "domain": r.get("domain", ""),
-        "font_name": r.get("font_name", ""),
+        "font_name": r.get("actual_font_name") or r.get("font_name", ""),
         "degradation_profile": r.get("degradation_profile", ""),
         "degradation_family": r.get("degradation_family", ""),
         "difficulty_bucket": r.get("difficulty_bucket", ""),
@@ -100,27 +104,43 @@ def process_row_worker(item):
         "has_bad_ocr": has_bad_ocr
     }
 
-def main():
+def main(argv=None):
     parser = argparse.ArgumentParser(description="MANTRA Stage 2.1 HTR Manifest Builder")
     parser.add_argument(
         "--metadata",
         type=str,
-        default="data/stage1_synthetic/metadata/synthetic_image_metadata_stage1_all_final.csv",
+        default=None,
         help="Path to final Stage 1 metadata CSV"
     )
     parser.add_argument(
         "--output-dir",
         type=str,
-        default="data/stage2_htr/manifests",
+        default=None,
         help="Directory to save generated CSV manifests"
     )
     parser.add_argument(
         "--report-dir",
         type=str,
-        default="data/stage2_htr/reports",
+        default=None,
         help="Directory to save QA reports"
     )
-    args = parser.parse_args()
+    parser.add_argument("--config", default="configs/stage1_synth100k_config.yaml",
+                        help="Stage 1 configuration defining the font holdouts")
+    parser.add_argument("--workers", type=int, default=min(8, os.cpu_count() or 1))
+    parser.add_argument("--data-config", default="configs/stage2_data_synth100k.yaml")
+    args = parser.parse_args(argv)
+    if args.workers < 1:
+        parser.error("workers must be positive")
+    config = yaml.safe_load(Path(args.config).read_text(encoding="utf-8"))
+    args.metadata = args.metadata or config.get("paths", {}).get(
+        "final_metadata", "data/stage1_synthetic/metadata/synthetic_image_metadata_stage1_all_final.csv"
+    )
+    if args.output_dir is None or args.report_dir is None:
+        data_config = yaml.safe_load(Path(args.data_config).read_text(encoding="utf-8"))
+        manifest_dir = Path(data_config["paths"]["manifest_all"]).parent
+        args.output_dir = args.output_dir or str(manifest_dir)
+        args.report_dir = args.report_dir or str(manifest_dir.parent / "reports")
+    approvals = load_approvals(config.get("label_review", {}).get("approved_labels_json"))
 
     print("=" * 70)
     print("MANTRA STAGE 2.1 HTR MANIFEST GENERATION PIPELINE (PARALLEL)")
@@ -157,6 +177,7 @@ def main():
     meta_rows = []
     with open(args.metadata, "r", encoding="utf-8") as f:
         reader = csv.DictReader(f)
+        missing_columns = sorted({"image_path", "text", "split", "line_id"} - set(reader.fieldnames or []))
         for r in reader:
             meta_rows.append(r)
     total_input_rows = len(meta_rows)
@@ -173,13 +194,16 @@ def main():
         work_items.append((r, helper_info))
         
     # Spawn context pool
-    num_workers = min(8, os.cpu_count() or 4)
+    num_workers = args.workers
     print(f"Using {num_workers} processes for manifest builds...")
     
     ctx = multiprocessing.get_context("spawn")
     results = []
-    with ctx.Pool(processes=num_workers) as pool:
-        results = pool.map(process_row_worker, work_items)
+    if num_workers == 1:
+        results = list(map(process_row_worker, work_items))
+    else:
+        with ctx.Pool(processes=num_workers) as pool:
+            results = pool.map(process_row_worker, work_items)
         
     # Aggregate results
     output_rows = []
@@ -190,6 +214,9 @@ def main():
     ascii_digit_rows = 0
     latin_letter_rows = 0
     bad_ocr_symbol_rows = 0
+    missing_required_rows = 0
+    unreadable_images = 0
+    invalid_split_rows = 0
     
     seen_image_paths = set()
     seen_image_paths_by_split = {"train": set(), "val": set(), "test": set()}
@@ -206,9 +233,9 @@ def main():
     degradation_counts = Counter()
     
     for idx, res in enumerate(results):
-        if res["status"] == "error":
-            print(f"ERROR: Missing required column in row {idx+1}")
-            sys.exit(1)
+        missing_required_rows += int(res["missing_required"])
+        unreadable_images += int(res["unreadable"])
+        invalid_split_rows += int(res["invalid_split"])
             
         image_path = res["image_path"]
         text = res["text"]
@@ -222,9 +249,10 @@ def main():
         if res["is_blank"]:
             blank_text_rows += 1
             
-        if image_path in seen_image_paths:
+        canonical_path = os.path.normcase(os.path.abspath(image_path))
+        if canonical_path in seen_image_paths:
             duplicate_image_paths += 1
-        seen_image_paths.add(image_path)
+        seen_image_paths.add(canonical_path)
         
         sp_lower = split.lower()
         if sp_lower in seen_image_paths_by_split:
@@ -291,24 +319,8 @@ def main():
         if sp_lower in splits_data:
             splits_data[sp_lower].append(row)
             
-    print("\nWriting manifests...")
-    
-    # htr_all.csv
-    all_path = os.path.join(args.output_dir, "htr_all.csv")
-    with open(all_path, "w", encoding="utf-8", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(output_rows)
-    print(f"Saved {len(output_rows)} rows to: {all_path}")
-    
-    # htr_train.csv, htr_val.csv, htr_test.csv
-    for name, rows in splits_data.items():
-        split_path = os.path.join(args.output_dir, f"htr_{name}.csv")
-        with open(split_path, "w", encoding="utf-8", newline="") as f:
-            writer = csv.DictWriter(f, fieldnames=fieldnames)
-            writer.writeheader()
-            writer.writerows(rows)
-        print(f"Saved {len(rows)} rows to: {split_path}")
+    # Publication is deferred until every hard QA gate passes. Existing
+    # manifests stay intact on failure, while diagnostics are always saved.
 
     # 6. Compute duplicate images in split stats
     dup_within_split = 0
@@ -319,8 +331,51 @@ def main():
             if count > 1:
                 dup_within_split += (count - 1)
 
+    # Validate label/line grouping as well as unique physical paths.
+    cross_split = {}
+    for key in ("text", "line_id"):
+        groups = {}
+        for row in output_rows:
+            groups.setdefault(row[key], set()).add(row["split"])
+        cross_split[key] = sum(len(splits) > 1 for splits in groups.values())
+    font_policy_error = ""
+    try:
+        font_violations = len(font_split_errors(output_rows, config))
+    except ValueError as error:
+        font_violations = len(output_rows)
+        font_policy_error = str(error)
+    failures = {
+        "empty_input": int(total_input_rows == 0),
+        "missing_columns": len(missing_columns),
+        "missing_required_rows": missing_required_rows,
+        "missing_image_paths": missing_image_paths,
+        "unreadable_images": unreadable_images,
+        "invalid_split_rows": invalid_split_rows,
+        "blank_text_rows": blank_text_rows,
+        "duplicate_image_paths": duplicate_image_paths,
+        "duplicate_line_id_variants": duplicate_line_id_variants,
+        "ascii_digit_rows": ascii_digit_rows,
+        "latin_letter_rows": latin_letter_rows,
+        "bad_ocr_symbol_rows": bad_ocr_symbol_rows,
+        "cross_split_texts": cross_split["text"],
+        "cross_split_line_ids": cross_split["line_id"],
+        "font_split_violations": font_violations,
+        "font_policy_error": int(bool(font_policy_error)),
+    }
+    gaps = evaluation_character_gaps(output_rows)
+    failures["unapproved_label_warning_rows"] = sum(needs_review(row["text"], approvals) for row in output_rows)
+    failures["validation_only_characters"] = len(gaps["val"])
+    failures["test_only_characters"] = len(gaps["test"])
+    qa_passed = not any(failures.values())
+    qa_status = "PASS" if qa_passed else "FAIL"
     # 7. Write QA report files (JSON and Markdown)
     qa_report_json = {
+        "qa_status": qa_status,
+        "validation": failures,
+        "missing_columns": missing_columns,
+        "font_policy_error": font_policy_error,
+        "evaluation_character_gaps": {split: [{"character": c, "codepoint": f"U+{ord(c):04X}"} for c in chars]
+                                      for split, chars in gaps.items()},
         "summary": {
             "total_rows": total_input_rows,
             "train_rows": len(splits_data["train"]),
@@ -361,6 +416,8 @@ def main():
     qa_pass_fail = lambda val: "PASS" if val == 0 else "FAIL"
     
     md_content = f"""# MANTRA Stage 2.1 HTR Manifest Quality Report
+
+QA status: **{qa_status}**
 
 ## Executive Summary
 This report summarizes the QA verification of the generated HTR training manifests derived from the finalized Stage 1 Synth100k metadata.
@@ -458,10 +515,25 @@ This report summarizes the QA verification of the generated HTR training manifes
     md_content += add_samples_section("Test Samples", test_samples)
     
     md_path = os.path.join(args.report_dir, "htr_manifest_report.md")
+    md_content += "\n## Publication Gates\n\n| Gate | Failures |\n| --- | --- |\n"
+    md_content += "".join(f"| {name} | {count} |\n" for name, count in failures.items())
     with open(md_path, "w", encoding="utf-8") as f:
         f.write(md_content)
     print(f"Saved QA report Markdown to: {md_path}")
+    if not qa_passed:
+        print("ERROR: QA failed. Manifests were not published; see the report.")
+        return 1
+    for name, rows in {"all": output_rows, **splits_data}.items():
+        destination = Path(args.output_dir) / f"htr_{name}.csv"
+        temporary = destination.with_suffix(".tmp")
+        with temporary.open("w", encoding="utf-8", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(rows)
+        temporary.replace(destination)
+        print(f"Saved {len(rows)} rows to: {destination}")
     print("=" * 70)
+    return 0
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

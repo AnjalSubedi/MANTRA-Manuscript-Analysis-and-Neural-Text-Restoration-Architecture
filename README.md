@@ -1,136 +1,192 @@
-# MANTRA: Manuscript Analysis and Neural Text Restoration Architecture
+# MANTRA
 
-MANTRA is an end-to-end framework designed for the recognition, restoration, and interpretation of historical Devanagari manuscripts. This repository hosts the pipeline and configurations for **Stage 1 (Synthetic Dataset Generation)** and **Stage 2 (HTR Manifest Generation)**.
+Manuscript Analysis and Neural Text Restoration Architecture provides synthetic
+Devanagari line generation and data preparation for handwritten text recognition.
+The current pipeline covers Stage 1 image generation, Stage 2 manifests,
+character vocabulary, preprocessing, PyTorch data loading, and draft manuscript
+line segmentation.
 
-## 📌 Project Overview
+## Folder structure
 
-MANTRA-Synth100k generates **100,000 synthetic Devanagari line images** with corresponding transcription ground truths. The dataset is designed to pretrain handwritten text recognition (HTR) models before transfer learning on printed and historical Devanagari manuscript data.
-
-### Core Stages
-
-```mermaid
-graph TD
-    A["Raw Text Corpus"] --> B["Text Cleaning & Normalization"]
-    B --> C["Stage 1: Chromium Text Renderer"]
-    C --> D["Controlled Degradation Profiles"]
-    D --> E["MANTRA-Synth100k Dataset (100k PNGs)"]
-    E --> F["Stage 2: HTR Manifest Generation"]
-    F --> G["QA Verification Gates"]
-    G --> H["Final Training Split Manifests"]
-```
-
-1. **Stage 1: Synthetic Dataset Generation**
-   - **Corpus Cleaning & Rare Glyph Targets:** Collects and cleans Sanskrit prose/verse, historical Nepali prose, and administrative styles. Guarantees frequency coverage for rare conjuncts, matras, dandas, and Devanagari numerals.
-   - **Chromium Rendering:** Renders text lines using Chromium's text shaper, ensuring correct Devanagari conjunct rendering and glyph positioning.
-   - **Degradation Engine:** Simulates historical manuscript conditions (faded ink, uneven background, scan noise, bleedthrough, warped lines) across 24 controlled degradation profiles.
-2. **Stage 2: HTR Manifest Generation**
-   - Consolidates the 100k synthetic dataset.
-   - Computes physical image metadata (width, height) and filters syntax errors.
-   - Splits data into `train` (79,243), `val` (12,649), and `test` (8,108) manifests, enforcing zero leakage.
-
----
-
-## 📂 Repository Structure
-
-```
+```text
 MANTRA/
-│
-├── configs/
-│   └── stage1_synth100k_config.yaml  # Main synthetic generation & degradation configuration
-│
-├── data/                             # Generated artifacts (ignored in Git except for README/manifest)
+├── configs/                  # Shared generation and loader settings
+├── src/
+│   ├── stage1_dataset/        # Cleaning, rendering, degradation, font policy, repairs
+│   ├── stage2_htr/            # Manifests, vocabulary, dataset, collation, inspection
+│   └── manuscripts/           # Draft line crops, source coordinates, review previews
+├── tests/
+│   ├── stage1_dataset/        # Font isolation and rendering regression checks
+│   ├── stage2_htr/            # Loader, configuration, and publication checks
+│   └── manuscripts/           # Crop geometry and mark-preservation checks
+├── docs/
+│   ├── development/          # Maintenance, layout, and validation notes
+│   ├── research/             # Methodology draft and dataset-source investigations
+│   ├── stage1_synthetic/     # Dataset design and generation documentation
+│   └── stage2_htr/           # Manifest, charset, and loader documentation
+├── data/                     # Local corpora and generated data; large files ignored
 │   ├── stage1_synthetic/
-│   │   ├── README.md                 # Description of the synthetic dataset
-│   │   ├── corpus_manifest.csv       # Summary of corpus sources and cleaning status
-│   │   ├── fonts/                    # Downloaded TTF font files
-│   │   ├── images/                   # Rendered png line-images (split into train/val/test)
-│   │   ├── labels/                   # CSV label lists of text lines per domain
-│   │   ├── metadata/                 # Detailed generation metadata CSVs
-│   │   └── text/                     # Text corpora files (raw, cleaned, generated)
-│   │
+│   │   ├── fonts/
+│   │   ├── images/            # Every new PNG output stays under images/
+│   │   │   └── font_holdout_v2/{train,val,test}/
+│   │   ├── labels/
+│   │   ├── metadata/
+│   │   ├── releases/          # Reviewed metadata, labels, quarantine and provenance
+│   │   └── text/{raw,cleaned,generated}/
 │   └── stage2_htr/
-│       ├── manifests/                # HTR train/val/test CSV splits
-│       └── reports/                  # Pipeline QA markdown and JSON reports
-│
-├── docs/                             # Project documentation
-│   ├── stage1_synthetic/             # Stage 1 detailed documentation
-│   │   ├── dataset_schema.md         # Schema description of final metadata CSV
-│   │   ├── phase3_cleaning_summary.md# Summary of corpus cleaning processes
-│   │   ├── phase3_text_cleaning.md   # Guidelines and patterns for raw text cleaning
-│   │   ├── phase4_synthetic_image_generation.md  # Setup, commands, and options for image generation
-│   │   ├── render_quality_summary_stage1_all_final.md # Stage 1 image quality audit
-│   │   ├── stage1_all_merge_report.md# Report on labels merging and final count targets
-│   │   └── stage1_dataset_design.md  # Core goals and architectural design of Stage 1
-│   │
-│   └── stage2_htr/                   # Stage 2 detailed documentation
-│       └── stage2_phase2_1_htr_manifest.md       # Stage 2.1 design, manifest schema, and QA gates
-│
-├── src/                              # Pipeline Source Code
-│   ├── stage1_dataset/               # Scripts for dataset synthesis, rendering, and QA
-│   │   ├── chromium_text_renderer.py # Chromium-based rendering interface
-│   │   ├── clean_corpus.py           # Text cleaning and preprocessing pipeline
-│   │   ├── degradation_profiles.py   # Degradation algorithms and profiles
-│   │   ├── finalize_dataset.py       # Reuses core images, checks missing items, generates top-ups
-│   │   ├── generate_coverage_lines.py# Generates rare matra and conjunct text lines
-│   │   ├── generate_final_dataset.py # Orchestrates parallel synthesis execution
-│   │   ├── generate_line_labels.py   # Splits corpus into line-level chunks
-│   │   ├── generate_synthetic_images.py # Base script for generating synthetic images
-│   │   ├── make_sample_grids.py      # Generates grid images for QA visual inspection
-│   │   ├── merge_core_labels.py      # Merges core label files
-│   │   ├── merge_final_labels.py     # Aggregates labels across all domains
-│   │   ├── phase3_report.py          # Generates phase 3 report summaries
-│   │   ├── qa_audit.py               # Generates reports on character frequency statistics
-│   │   ├── render_quality_check.py   # Audits rendered images for clipping and readability
-│   │   └── render_text_line.py       # Wrapper for rendering text lines
-│   │
-│   └── stage2_htr/                   # Scripts for HTR manifests
-│       └── build_htr_manifest.py     # Verifies data integrity and exports training manifest splits
-│
-└── .gitignore                        # Git exclusion rules for large datasets
+│       ├── releases/          # Matching manifests, vocabulary and QA per release
+│       └── {manifests,vocab,reports}/ # Legacy artifacts
+├── outputs/                  # Run logs, resumable repair journals, backups; ignored
+├── pyproject.toml            # Editable package and test configuration
+├── requirements.txt          # Verified runtime dependencies
+└── requirements-dev.txt      # Runtime dependencies and pytest
 ```
 
----
+Reusable code belongs in `src/`, regression tests in `tests/`, and explanatory
+documents in `docs/`. Keep one-off reports and logs in a named `outputs/` run
+folder. Generated data and checkpoints do not belong in Git.
 
-## ⚡ Quick Start
+## Setup
 
-### 1. Prerequisites & Environment Setup
-Ensure Python 3.10+ is installed. Clone the repository and install required packages:
+Use Python 3.10 or newer; the pinned requirements were verified with Python 3.13
+on Windows. From the repository root:
+
 ```bash
-pip install -r requirements.txt
-playwright install chromium
+python -m pip install -r requirements-dev.txt
+python -m pip install -e . --no-deps
+python -m playwright install chromium
+python -m pytest -q
 ```
 
-### 2. Generate Synthetic Dataset (Stage 1)
-To generate raw line labels, download fonts, render synthetic images, apply degradation, and assemble the final 100k dataset:
+The raw corpora, generated label files, fonts, PNGs, metadata, and Stage 2
+artifacts are local inputs/outputs excluded from Git. A fresh checkout needs the
+corpus and label inputs described in [dataset design](docs/stage1_synthetic/stage1_dataset_design.md)
+before image generation. The repository does not include a corpus downloader
+for every source; copying this repository alone does not reproduce the dataset.
+
+## Work with an existing dataset
+
+The Stage 1 configuration selects the active metadata and labels through
+`paths.final_metadata` and `paths.final_labels`. The Stage 2 configuration selects
+the matching manifests and vocabulary. Use these configured paths for training;
+older files under the flat `labels/`, `metadata/` and `manifests/` folders remain
+historical snapshots. See the [label-review release](docs/development/label_review_release.md)
+for quarantine decisions, source-verification limits and release checks.
+
+First validate Stage 1 metadata and publish manifests. Failed QA writes reports,
+returns a nonzero exit code, and leaves any existing manifests untouched.
+
 ```bash
-# Run raw text cleaning
-python src/stage1_dataset/clean_corpus.py
+python src/stage2_htr/build_htr_manifest.py
+python src/stage2_htr/build_charset.py
+python src/stage2_htr/inspect_dataset.py --num-samples 32
+python src/stage2_htr/inspect_dataset.py --check-all
+```
 
-# Generate text lines targeting specific coverages
-python src/stage1_dataset/generate_coverage_lines.py
+The full inspection decodes pixels, applies the configured preprocessing,
+roundtrips labels, checks tensor shape and range, and collates every successful
+sample. It does not accept image headers as proof that pixels are readable.
+Failures produce JSON and Markdown diagnostics, including when no sample loads.
 
-# Perform core and final labeling merges
+## Font holdouts and existing data repair
+
+`configs/stage1_synth100k_config.yaml` assigns validation fonts to Biryani and
+Jaldi, and test fonts to Mukta and Noto Serif Devanagari. The remaining fonts are
+used for training. Font fallback stays within the sample's assigned split.
+Manifest publication rejects violations of this policy.
+
+The bundled Hind, Poppins, Rajdhani, Rozha One and Teko faces use Latin numeral
+forms for Devanagari digit code points. They are allowed for lines without
+Devanagari digits; digit-bearing lines use another font within their split.
+Character-map coverage alone is insufficient to approve those combinations.
+
+For a legacy dataset generated before font isolation was enforced:
+
+```bash
+python src/stage1_dataset/repair_font_splits.py --plan-only
+python src/stage1_dataset/repair_font_splits.py --workers 3
+python src/stage2_htr/build_htr_manifest.py --workers 3
+python src/stage2_htr/inspect_dataset.py --check-all
+```
+
+The repair preserves text, line IDs, split membership, and row count. It keeps
+original PNGs, writes replacement PNGs under `images/font_holdout_v2/`, and backs
+up the old metadata and Stage 2 artifacts under `outputs/font_split_repair/`.
+It uses Chromium's shaped canvas renderer, records the actual rendering and
+degradation metadata, and publishes the new metadata only after all replacements
+pass. Repeating an interrupted run resumes its journal.
+
+## Generate new images
+
+With the corpus-derived and generated label CSVs available, the merge and image
+generation sequence is:
+
+```bash
+python src/stage1_dataset/merge_core_labels.py
 python src/stage1_dataset/merge_final_labels.py
-
-# Run parallel image rendering and degradation synthesis
+python src/stage1_dataset/generate_synthetic_images.py --labels data/stage1_synthetic/labels/stage1_core_merged_lines.csv --metadata-out data/stage1_synthetic/metadata/synthetic_image_metadata_core_merged.csv
 python src/stage1_dataset/generate_final_dataset.py
-
-# Finalize image counts and outputs to exactly 100k
 python src/stage1_dataset/finalize_dataset.py
 ```
 
-### 3. Generate HTR Training Manifests (Stage 2)
-To inspect the 100k images on disk, run automated QA validations, and build the train, validation, and test splits:
-```bash
-python src/stage2_htr/build_htr_manifest.py
+See the [Stage 1 documentation](docs/stage1_synthetic/phase4_synthetic_image_generation.md)
+for cleaning, label preparation, and rendering details. Generation and
+finalization enforce the configured font partition, and finalization preserves
+an already valid 100,000-row dataset instead of replacing it with legacy parts.
+
+## Loader configuration
+
+`configs/stage2_data_synth100k.yaml` controls image height, width limits, inversion,
+paths, batch size, and worker count. Relative configured paths are resolved from
+the repository root. CLI `--manifest`, `--charset`, and `--batch-size` override
+the respective settings.
+
+```python
+from stage2_htr.config import load_data_config, dataset_options, make_dataloader
+from stage2_htr.dataset import HTRLineDataset
+
+config = load_data_config()
+dataset = HTRLineDataset(
+    config["paths"]["manifest_train"], config["paths"]["charset_json"],
+    **dataset_options(config),
+)
+loader = make_dataloader(dataset, config)
 ```
 
----
+With a width limit, the dataset filters over-wide images before sampling and
+exposes them in `dataset.skipped_rows`. An all-filtered inspection fails with a
+report instead of attempting an empty batch. Inversion and padding agree:
+white background uses `1.0`; inverted black background uses `0.0`.
 
-## 🔍 Quality Assurance (QA) Gates
-The generation and partitioning pipelines enforce strict quality limits to guarantee clean training datasets:
-- **0 Physical Image Path Failures:** Ensures every referenced image file physically exists on the disk.
-- **0 Empty Labels:** Filters out empty transcriptions.
-- **0 Duplicate Path Leakage:** Enforces global and split-specific uniqueness of paths.
-- **0 ASCII/Latin Intrusion:** Verifies that no Western numerals (`0-9`) or letters (`a-z`) contaminate the Sanskrit and Devanagari labels.
-- **0 Bad OCR Symbols:** Removes invalid symbols (e.g. `_ & % € [ ]`) while preserving correct Devanagari punctuation (Visarga, Dandda, etc.).
+On Windows, create worker-based loaders inside an `if __name__ == "__main__":`
+guard. The inspection command already does this.
+
+See [maintenance and validation](docs/development/review_fixes.md) and
+[the loader reference](docs/stage2_htr/stage2_phase2_3_dataset_loader.md).
+
+## Manuscript line segmentation
+
+The manuscript command proposes line boundaries for a main text block with
+roughly horizontal Devanagari writing. It exports line PNGs, source coordinates,
+numbered page previews, contact sheets, and an index for visual review. Source
+pixels inside each polygon retain their original resolution; the surrounding
+area is filled with white.
+
+For locally acquired EAP272/1/2/11 scans named
+`EAP272-1-2-11_0001.png` through `EAP272-1-2-11_0129.png`, run:
+
+```bash
+python src/manuscripts/segment_lines.py --input-dir outputs/manuscript_downloads/EAP272-1-2-11/images --output-dir outputs/manuscript_segmentation/EAP272-1-2-11/segmentation_v2 --overrides configs/manuscripts/eap272_1_2_11.json
+```
+
+Use `--pages 2-5,20,129` for a smaller selection in its own output directory.
+Repeating a run verifies the source and output hashes before reusing completed
+pages. Use a new output directory when changing the source selection or settings.
+
+All crops await visual review. Flags identify potential ink intersections and
+irregular spacing. The collection configuration leaves the handwritten cover
+for manual layout review and supplies the final page's single-line region.
+Marginal notes and folio numbers need separate review. The source scans and
+generated crops are local files excluded from Git. Consult the
+[manuscript-source investigation](docs/research/manuscript_dataset_sources.md)
+for provenance and access findings.

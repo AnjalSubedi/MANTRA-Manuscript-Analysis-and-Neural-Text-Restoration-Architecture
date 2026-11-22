@@ -16,6 +16,7 @@ class ChromiumTextRenderer:
         self.playwright = None
         self.browser = None
         self.page = None
+        self._canvas_fonts = {}
         
     def start(self):
         """Launches the Playwright Chromium instance if not already running."""
@@ -28,6 +29,7 @@ class ChromiumTextRenderer:
             
     def close(self):
         """Closes the browser and stops Playwright."""
+        self._canvas_fonts.clear()
         if self.page:
             self.page.close()
             self.page = None
@@ -90,6 +92,7 @@ class ChromiumTextRenderer:
         """
         
         # Load custom page
+        self._canvas_fonts.clear()
         self.page.set_content(html_content)
         
         # Wait until font is fully loaded in page
@@ -103,6 +106,49 @@ class ChromiumTextRenderer:
         screenshot_bytes = element.screenshot()
         img = Image.open(BytesIO(screenshot_bytes))
         return img.convert("RGB")
+
+    def render_text_canvas(self, text, font_path, font_size, padding_x, padding_y,
+                           bg_color=(255, 255, 255), text_color=(0, 0, 0)):
+        """Use Chromium's shaped canvas text without a page screenshot per row.
+
+        Fonts remain loaded in the page. Canvas uses Chromium's text shaper,
+        while measured ink bounds prevent clipping of matras and Vedic marks.
+        """
+        self.start()
+        font_key = os.path.abspath(font_path)
+        if font_key not in self._canvas_fonts:
+            family = f"MANTRAFont{len(self._canvas_fonts)}"
+            with open(font_path, "rb") as stream:
+                encoded_font = base64.b64encode(stream.read()).decode("ascii")
+            self.page.evaluate("""async ({family, encoded}) => {
+                const bytes = Uint8Array.from(atob(encoded), c => c.charCodeAt(0));
+                const face = new FontFace(family, bytes.buffer);
+                await face.load();
+                document.fonts.add(face);
+            }""", {"family": family, "encoded": encoded_font})
+            self._canvas_fonts[font_key] = family
+        encoded = self.page.evaluate("""({text, family, size, px, py, bg, ink}) => {
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d');
+            ctx.font = `${size}px ${family}`;
+            const metrics = ctx.measureText(text);
+            const left = Math.max(0, metrics.actualBoundingBoxLeft);
+            const ascent = Math.ceil(metrics.actualBoundingBoxAscent);
+            const descent = Math.ceil(metrics.actualBoundingBoxDescent);
+            canvas.width = Math.max(1, Math.ceil(Math.max(metrics.width,
+                metrics.actualBoundingBoxRight) + left) + 2 * px);
+            canvas.height = Math.max(1, ascent + descent + 2 * py);
+            ctx.fillStyle = `rgb(${bg.join(',')})`;
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.font = `${size}px ${family}`;
+            ctx.fillStyle = `rgb(${ink.join(',')})`;
+            ctx.fillText(text, px + left, py + ascent);
+            return canvas.toDataURL('image/png').split(',')[1];
+        }""", {"text": unicodedata.normalize("NFC", text),
+                "family": self._canvas_fonts[font_key], "size": font_size,
+                "px": padding_x, "py": padding_y, "bg": bg_color, "ink": text_color})
+        with Image.open(BytesIO(base64.b64decode(encoded))) as image:
+            return image.convert("RGB")
 
 def get_chromium_renderer():
     """Returns the shared Chromium renderer singleton."""

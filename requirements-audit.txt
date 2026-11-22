@@ -1,0 +1,3 @@
+-r requirements.txt
+# Optional independent OCR used for review, never for automatic relabeling.
+easyocr==1.7.2

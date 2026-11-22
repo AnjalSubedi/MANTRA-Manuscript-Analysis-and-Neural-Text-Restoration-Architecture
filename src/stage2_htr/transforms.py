@@ -7,6 +7,7 @@ Converts raw PNG line images into grayscale float32 tensors [1, H, W]
 with aspect-ratio-preserving resize to a fixed height.
 """
 import logging
+import numpy as np
 from PIL import Image
 import torch
 
@@ -26,10 +27,10 @@ def load_image(path: str) -> Image.Image:
         FileNotFoundError: if the path does not exist.
         Exception: for corrupt / unreadable files.
     """
-    img = Image.open(path)
-    if img.mode != "L":
-        img = img.convert("L")
-    return img
+    with Image.open(path) as img:
+        # Conversion forces pixel decoding and detaches the result from the
+        # file handle, including when the source is already grayscale.
+        return img.convert("L")
 
 
 def resize_to_height(img: Image.Image, target_height: int) -> Image.Image:
@@ -47,6 +48,8 @@ def resize_to_height(img: Image.Image, target_height: int) -> Image.Image:
         Resized PIL Image with height == target_height.
     """
     orig_w, orig_h = img.size
+    if target_height <= 0:
+        raise ValueError("target_height must be positive")
     if orig_h == target_height:
         return img
     scale = target_height / orig_h
@@ -74,7 +77,7 @@ def image_to_tensor(img: Image.Image, invert: bool = False) -> torch.Tensor:
     # Convert to float [0, 1]
     tensor = torch.from_numpy(
         # numpy array is uint8 [H, W]
-        __import__("numpy").array(img, dtype="float32") / 255.0
+        np.array(img, dtype="float32") / 255.0
     )
     if invert:
         tensor = 1.0 - tensor
@@ -87,7 +90,7 @@ def preprocess_image(
     target_height: int = 64,
     max_width: int | None = None,
     invert: bool = False,
-) -> tuple[torch.Tensor, tuple[int, int], tuple[int, int]]:
+) -> tuple[torch.Tensor | None, tuple[int, int], tuple[int, int]]:
     """End-to-end image preprocessing pipeline.
 
     Steps:

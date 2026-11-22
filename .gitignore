@@ -4,6 +4,10 @@ __pycache__/
 .venv/
 venv/
 env/
+.pytest_cache/
+*.egg-info/
+build/
+dist/
 
 # Large dataset outputs
 data/stage1_synthetic/images/
@@ -39,4 +43,6 @@ data/stage2_htr/manifests/
 data/stage2_htr/reports/
 data/stage2_htr/vocab/
 outputs/stage2_htr/
+data/stage1_synthetic/releases/
+data/stage2_htr/releases/
 

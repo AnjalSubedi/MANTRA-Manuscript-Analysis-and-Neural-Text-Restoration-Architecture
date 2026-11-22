@@ -2,6 +2,7 @@ import os
 import sys
 import logging
 from PIL import Image, ImageDraw, ImageFont, ImageOps
+from stage1_dataset.font_policy import font_preserves_devanagari_digits
 
 logger = logging.getLogger(__name__)
 
@@ -13,6 +14,8 @@ def check_font_supports_text(font_path, text):
     Checks if the font file contains glyphs for all non-whitespace characters in the text.
     Uses fontTools to query the font's cmap table.
     """
+    if not font_preserves_devanagari_digits(font_path, text):
+        return False
     if font_path not in _font_cmaps:
         try:
             from fontTools.ttLib import TTFont
@@ -253,7 +256,9 @@ def render_text_line(text, font_path, font_size, padding_x=15, padding_y=15, bg_
     
     # Establish priority list
     priority = []
-    if renderer_preference == "chromium":
+    if renderer_preference == "chromium_canvas":
+        priority = ["chromium_canvas"]
+    elif renderer_preference == "chromium":
         priority = ["chromium"]
     elif renderer_preference == "pango_cairo":
         priority = ["pango_cairo"]
@@ -275,12 +280,13 @@ def render_text_line(text, font_path, font_size, padding_x=15, padding_y=15, bg_
                 break
             except Exception as e:
                 logger.debug(f"Pango/Cairo rendering failed: {e}")
-        elif r_type == "chromium" and chromium_ok:
+        elif r_type in ("chromium", "chromium_canvas") and chromium_ok:
             try:
                 from stage1_dataset.chromium_text_renderer import get_chromium_renderer
                 renderer = get_chromium_renderer()
-                img = renderer.render_text(text, font_path, font_size, padding_x, padding_y, bg_color, text_color)
-                renderer_used = "chromium"
+                render = renderer.render_text_canvas if r_type == "chromium_canvas" else renderer.render_text
+                img = render(text, font_path, font_size, padding_x, padding_y, bg_color, text_color)
+                renderer_used = r_type
                 break
             except Exception as e:
                 logger.debug(f"Chromium rendering failed: {e}")
@@ -295,7 +301,7 @@ def render_text_line(text, font_path, font_size, padding_x=15, padding_y=15, bg_
     # If no preferred or auto renderer worked, fall back to plain Pillow
     # but only if renderer_preference is auto or not set strictly
     if img is None:
-        if renderer_preference in ["chromium", "pango_cairo", "pillow_raqm"]:
+        if renderer_preference in ["chromium", "chromium_canvas", "pango_cairo", "pillow_raqm"]:
             placeholder = Image.new("RGB", (100, 40), bg_color)
             return placeholder, "failed", "failed", f"renderer_{renderer_preference}_failed"
             

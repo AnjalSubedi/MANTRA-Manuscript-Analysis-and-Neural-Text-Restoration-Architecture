@@ -14,9 +14,9 @@ Phase 2.3 bridges the gap between the static Stage 2.1/2.2 artefacts (manifest C
 4. An inspection script for offline QA without training.
 
 > [!WARNING]
-> **Do not modify Stage 1 or Stage 2.1/2.2 files.**
-> The images, metadata, manifests, and charset are finalized.
-> All preprocessing is applied *on-the-fly* during dataset loading — source files are read-only.
+> Dataset loading treats source images, labels, and vocabulary as read-only.
+> Maintenance repairs use the dedicated repair command, preserve the original
+> artifacts, and rebuild validated manifests. See `docs/development/review_fixes.md`.
 
 ---
 
@@ -87,7 +87,12 @@ Each sample returned by `HTRLineDataset.__getitem__` is a dictionary:
 
 ### Width Handling
 - **Default:** `max_width = null` — no width cap.
-- **If `max_width` is set:** images wider than `max_width` after resize are **skipped** (never loaded). They are reported as load failures.
+- **If `max_width` is set:** actual image dimensions are checked during dataset
+  initialization. Over-wide rows are excluded before DataLoader sampling and
+  listed in `dataset.skipped_rows` and the inspection report's `skipped_width_rows`.
+  Unreadable images remain in the dataset so QA reports their load failures.
+- An empty or all-filtered inspection produces a failure report without collating
+  an empty batch. Width exclusions alone do not fail an otherwise valid inspection.
 - **Never crop** text content.
 - **Never stretch** or squeeze horizontally.
 - **Aspect ratio is always preserved.**
@@ -98,6 +103,9 @@ Each sample returned by `HTRLineDataset.__getitem__` is a dictionary:
 - **Default (`invert_image: false`):** Background ≈ 1.0 (white), text ≈ 0.0 (dark).
 - **Inverted (`invert_image: true`):** Background ≈ 0.0 (black), text ≈ 1.0 (bright).
 - No channel mean/std normalization in Phase 2.3.
+- Use `dataset_options(load_data_config())` when constructing the dataset to apply
+  the configured height, width cap, and inversion. `make_dataloader` applies the
+  corresponding background padding and configured worker settings.
 
 ### Batch Padding
 - In `htr_collate_fn`, images are right-padded to the maximum width in the batch.
@@ -145,7 +153,7 @@ python src/stage2_htr/inspect_dataset.py \
   --num-samples 32 --batch-size 8
 ```
 
-### Full dry-run (all 100k rows)
+### Full dry-run (all active rows)
 ```bash
 python src/stage2_htr/inspect_dataset.py \
   --manifest data/stage2_htr/manifests/htr_all.csv \
@@ -153,11 +161,18 @@ python src/stage2_htr/inspect_dataset.py \
   --check-all
 ```
 
+This path loads and decodes image pixels, resizes and converts them to tensors,
+checks labels/tensor validity, and collates every successfully loaded sample.
+It uses the same configuration as sample inspection and rejects truncated PNGs
+even if their headers are readable. Failed samples are counted with diagnostics;
+only successful indices enter the final DataLoader smoke test.
+
 ### Expected QA Outputs
 - `data/stage2_htr/reports/dataset_loader_report.md`
 - `data/stage2_htr/reports/dataset_loader_report.json`
 - `data/stage2_htr/reports/preprocessed_samples_grid.png`
 - `data/stage2_htr/reports/dataset_loader_check_all.json` (when `--check-all` is used)
+- `data/stage2_htr/reports/dataset_loader_check_all.md` (when `--check-all` is used)
 
 ---
 
@@ -173,5 +188,10 @@ dataset:
 
 dataloader:
   batch_size: 16
-  num_workers: 4
+  num_workers: 2
 ```
+
+The inspection command loads this file by default; use `--config` to select
+another configuration. `--manifest`, `--charset`, and `--batch-size` override
+the corresponding configuration values. Unsupported augmentation and pixel
+ranges are rejected explicitly.

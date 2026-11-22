@@ -1,0 +1,417 @@
+"""Propose manuscript line crops and retain source geometry for human review.
+
+Run with --help for arguments. Outputs are draft annotations. The detector is
+intended for a single main text block with roughly horizontal Devanagari lines.
+It preserves source pixels inside polygons and writes white outside them.
+"""
+
+import argparse
+import csv
+import hashlib
+import json
+import math
+import os
+from pathlib import Path
+import shutil
+import tempfile
+
+import cv2
+import numpy as np
+from PIL import Image, ImageDraw
+
+
+VERSION = "2"
+
+
+def digest(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def atomic_json(path, value):
+    temporary = path.with_suffix(path.suffix + ".part")
+    temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
+    temporary.replace(path)
+
+
+def detection_gray(image):
+    """Ignore long red ruling during detection while retaining red text marks."""
+    pixels = np.asarray(image)
+    gray = np.asarray(image.convert("L")).copy()
+    red = pixels[:, :, 0].astype(np.int16)
+    colored = ((red - pixels[:, :, 1] > 15) & (red - pixels[:, :, 2] > 15)).astype(np.uint8)
+    height, width = gray.shape
+    joined = cv2.morphologyEx(colored, cv2.MORPH_CLOSE, np.ones((max(1, height // 100), 1), dtype=np.uint8))
+    _, labels, components, _ = cv2.connectedComponentsWithStats(joined, 8)
+    rules = np.zeros(gray.shape, dtype=np.uint8)
+    for index, component in enumerate(components[1:], start=1):
+        if component[3] > height * 0.25 and component[2] < width * 0.04:
+            rules[labels == index] = 1
+    rules = cv2.dilate(rules, np.ones((1, 3), dtype=np.uint8))
+    gray[rules.astype(bool)] = 255
+    return gray
+
+
+def largest_band(active, close_size, horizontal=False):
+    values = active.astype(np.uint8).reshape(-1, 1)
+    kernel = np.ones((close_size, 1), dtype=np.uint8)
+    if horizontal:
+        values = values.T
+        kernel = kernel.T
+    joined = cv2.morphologyEx(values, cv2.MORPH_CLOSE, kernel)
+    _, _, components, _ = cv2.connectedComponentsWithStats(joined, 8)
+    if len(components) < 2:
+        raise ValueError("No usable text band detected")
+    axis = 0 if horizontal else 1
+    length = 2 if horizontal else 3
+    component = max(components[1:], key=lambda item: int(item[length]))
+    start = int(component[axis])
+    return start, start + int(component[length])
+
+
+def line_headlines(profile, page_width):
+    """Estimate line pitch, then suppress secondary peaks within each line."""
+    smooth = np.convolve(profile, [0.2, 0.6, 0.2], mode="same")
+    if len(profile) < 3 or not smooth.max():
+        raise ValueError("Text projection is empty")
+    if len(profile) < page_width * 0.045:
+        return [int(smooth.argmax())], None
+    centered = smooth - smooth.mean()
+    correlation = np.correlate(centered, centered, mode="full")[len(profile) - 1:]
+    correlation /= max(float(correlation[0]), 1e-8)
+    lower = max(12, int(page_width * 0.012))
+    upper = min(int(page_width * 0.065), len(profile) // 2)
+    peaks = [
+        index for index in range(lower, upper)
+        if correlation[index] >= correlation[index - 1]
+        and correlation[index] > correlation[index + 1]
+    ]
+    if not peaks:
+        raise ValueError("Could not estimate line spacing; set explicit headlines")
+    strongest = max(correlation[index] for index in peaks)
+    pitch = next(index for index in peaks if correlation[index] >= 0.62 * strongest)
+    candidates = [
+        index for index in range(1, len(smooth) - 1)
+        if smooth[index] >= smooth[index - 1]
+        and smooth[index] > smooth[index + 1]
+        and smooth[index] > 0.30 * smooth.max()
+    ]
+    selected = []
+    for candidate in sorted(candidates, key=lambda index: smooth[index], reverse=True):
+        if all(abs(candidate - other) > max(8, pitch * 0.62) for other in selected):
+            selected.append(candidate)
+    if not selected:
+        raise ValueError("No line peaks detected")
+    return sorted(selected), pitch
+
+
+def detect_layout(image, override):
+    width, height = image.size
+    scale = min(1.0, 1600 / width)
+    analysis_width = round(width * scale)
+    analysis_height = round(height * scale)
+    small = image.resize((analysis_width, analysis_height), Image.Resampling.LANCZOS)
+    gray = detection_gray(small)
+    threshold, _ = cv2.threshold(
+        gray[int(analysis_height * 0.18):int(analysis_height * 0.8),
+             int(analysis_width * 0.2):int(analysis_width * 0.85)],
+        0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU,
+    )
+    mask = (gray < threshold).astype(np.uint8)
+    if "roi_fraction" in override:
+        fraction = override["roi_fraction"]
+        if len(fraction) != 4 or not all(0 <= value <= 1 for value in fraction):
+            raise ValueError("ROI fractions must be four values between zero and one")
+        left, top, right, bottom = (
+            round(fraction[0] * analysis_width), round(fraction[1] * analysis_height),
+            round(fraction[2] * analysis_width), round(fraction[3] * analysis_height),
+        )
+    else:
+        left, right = int(analysis_width * 0.09), int(analysis_width * 0.93)
+        top, bottom = int(analysis_height * 0.10), int(analysis_height * 0.89)
+        profile = mask[top:bottom, left:right].mean(axis=1)
+        active = profile > max(0.025, float(np.percentile(profile, 90)) * 0.16)
+        band_top, band_bottom = largest_band(active, 15)
+        top, bottom = top + band_top, top + band_bottom
+        columns = mask[top:bottom, left:right].mean(axis=0)
+        active = columns > max(0.025, float(np.percentile(columns, 85)) * 0.16)
+        band_left, band_right = largest_band(active, 7, horizontal=True)
+        left, right = left + band_left, left + band_right
+    if not (0 <= left < right <= analysis_width and 0 <= top < bottom <= analysis_height):
+        raise ValueError("Text region must have positive area within the image")
+    if "headlines_fraction" in override:
+        headlines = [round(value * analysis_height) for value in override["headlines_fraction"]]
+        if not headlines or any(not top <= value < bottom for value in headlines):
+            raise ValueError("Explicit headlines must fall within the text region")
+        if headlines != sorted(set(headlines)):
+            raise ValueError("Explicit headlines must be increasing and distinct")
+        pitch = float(np.median(np.diff(headlines))) if len(headlines) > 1 else bottom - top
+    else:
+        projection_top = max(0, top - 8)
+        projection_bottom = min(analysis_height, bottom + 8)
+        profile = mask[projection_top:projection_bottom, left:right].mean(axis=1)
+        positions, pitch = line_headlines(profile, analysis_width)
+        headlines = [projection_top + position for position in positions]
+        pitch = pitch or bottom - top
+    padding = max(5, round(pitch * 0.22))
+    left = max(0, left - padding)
+    right = min(analysis_width, right + padding)
+    top = max(0, min(top, headlines[0]) - round(pitch * 0.65))
+    bottom = min(analysis_height, max(bottom, headlines[-1]) + round(pitch * 0.45))
+    return {
+        "roi": [math.floor(left * width / analysis_width),
+                math.floor(top * height / analysis_height),
+                math.ceil(right * width / analysis_width),
+                math.ceil(bottom * height / analysis_height)],
+        "headlines": [round(value * height / analysis_height) for value in headlines],
+        "pitch": pitch * height / analysis_height,
+        "ink_threshold": float(threshold),
+    }
+
+
+def gap_path(gray, left, right, upper_headline, lower_headline, ink_threshold):
+    """Find a low-ink path between neighbouring lines in native coordinates."""
+    pitch = lower_headline - upper_headline
+    if pitch < 4:
+        raise ValueError("Line spacing is too small")
+    low = upper_headline + max(2, round(pitch * 0.42))
+    high = lower_headline - 1
+    center = upper_headline + pitch * 0.83
+    patch = gray[low:high, left:right].astype(np.float32)
+    if not patch.size:
+        raise ValueError("Empty corridor between lines")
+    ink = (patch < ink_threshold).astype(np.float32)
+    darkness = np.maximum(0, ink_threshold + 40 - patch) / 80
+    distance = (np.arange(low, high)[:, None] - center) / max(pitch, 1)
+    cost = 180 * ink + darkness + 18 * distance ** 2
+    row_count, column_count = cost.shape
+    history = np.empty((row_count, column_count), dtype=np.int32)
+    scores = cost[:, 0].copy()
+    rows = np.arange(row_count)
+    for column in range(1, column_count):
+        predecessors = np.stack([
+            np.r_[np.inf, scores[:-1] + 0.25], scores,
+            np.r_[scores[1:] + 0.25, np.inf],
+        ])
+        choice = predecessors.argmin(axis=0)
+        scores = cost[:, column] + predecessors[choice, rows]
+        history[:, column] = rows + choice - 1
+    position = int(scores.argmin())
+    seam = np.empty(column_count, dtype=np.int32)
+    for column in range(column_count - 1, -1, -1):
+        seam[column] = position + low
+        if column:
+            position = int(history[position, column])
+    hits = gray[seam, np.arange(left, right)] < ink_threshold
+    return seam, float(hits.mean())
+
+
+def crop_polygon(image, left, right, top, bottom):
+    """Extract unchanged source pixels inside an exclusive-bottom polygon mask."""
+    width, height = image.size
+    if not (0 <= left < right <= width):
+        raise ValueError("Invalid horizontal crop bounds")
+    if len(top) != right - left or len(bottom) != right - left:
+        raise ValueError("Boundary lengths do not match crop width")
+    if np.any(top < 0) or np.any(bottom > height) or np.any(top >= bottom):
+        raise ValueError("Crossing or out-of-image boundaries")
+    min_y, max_y = int(np.min(top)), int(np.max(bottom))
+    source = np.asarray(image)[min_y:max_y, left:right]
+    rows = np.arange(min_y, max_y)[:, None]
+    mask = (rows >= top[None, :]) & (rows < bottom[None, :])
+    result = np.full(source.shape, 255, dtype=np.uint8)
+    result[mask] = source[mask]
+    polygon = [[left + index, int(value)] for index, value in enumerate(top)]
+    polygon += [[left + index, int(bottom[index])] for index in range(right - left - 1, -1, -1)]
+    return Image.fromarray(result), [left, min_y, right, max_y], polygon
+
+
+def export_page(path, destination, override, binding):
+    with Image.open(path) as opened:
+        opened.load()
+        image = opened.convert("RGB")
+    record = {
+        "source_file": str(path.resolve()), "source_sha256": digest(path),
+        "source_size": list(image.size), "binding": binding,
+        "review_status": "pending", "flags": [], "lines": [],
+        "scope": "Main text block; marginal notes and folio numbers need separate review",
+        "coordinate_system": "Original pixels, top-left origin, exclusive right/bottom bbox",
+    }
+    overview = image.copy()
+    draw = ImageDraw.Draw(overview)
+    if override.get("action") == "review_only":
+        record["flags"] = [override.get("reason", "Manual layout decision required")]
+        record["status"] = "review_only"
+    else:
+        layout = detect_layout(image, override)
+        record["layout"] = layout
+        left, top, right, bottom = layout["roi"]
+        headlines = layout["headlines"]
+        gray = detection_gray(image)
+        boundaries = [np.full(right - left, top, dtype=np.int32)]
+        crossings = []
+        for upper, lower in zip(headlines, headlines[1:]):
+            seam, fraction = gap_path(gray, left, right, upper, lower, layout["ink_threshold"])
+            boundaries.append(seam)
+            crossings.append(fraction)
+        boundaries.append(np.full(right - left, bottom, dtype=np.int32))
+        if len(headlines) > 2:
+            spacing = np.diff(headlines)
+            median = float(np.median(spacing))
+            if spacing.min() < median * 0.65 or spacing.max() > median * 1.4:
+                record["flags"].append("Irregular spacing: inspect for a missed or extra line")
+        lines_dir = destination / "lines"
+        lines_dir.mkdir()
+        thumbnails = []
+        for number, (upper, lower) in enumerate(zip(boundaries, boundaries[1:]), start=1):
+            crop, box, polygon = crop_polygon(image, left, right, upper, lower)
+            filename = f"{path.stem}_line{number:02d}.png"
+            crop.save(lines_dir / filename)
+            line_flags = []
+            edge_hits = [0.0 if number == 1 else crossings[number - 2],
+                         0.0 if number == len(headlines) else crossings[number - 1]]
+            if max(edge_hits) > 0:
+                line_flags.append("Boundary crosses detected ink; inspect touching characters")
+            if max(edge_hits) > 0.003:
+                record["flags"].append(f"Line {number}: boundary crosses detected ink")
+            record["lines"].append({
+                "line_id": filename[:-4], "file": "lines/" + filename,
+                "sha256": digest(lines_dir / filename), "bbox_xyxy": box,
+                "polygon_xy": polygon, "review_status": "pending", "flags": line_flags,
+                "boundary_ink_fraction_top_bottom": edge_hits,
+                "pixels": "Source RGB inside polygon; white outside; no resampling",
+            })
+            draw.line([tuple(point) for point in polygon + [polygon[0]]], fill=(220, 35, 35), width=max(1, image.width // 800))
+            draw.text((min(right + 4, image.width - 35), int(np.mean(upper))),
+                      f"L{number:02d}", fill=(220, 35, 35), stroke_width=max(0, image.width // 2500))
+            crop.thumbnail((1400, 170), Image.Resampling.LANCZOS)
+            thumbnails.append((number, crop.copy()))
+        sheet = Image.new("RGB", (1460, sum(crop.height + 26 for _, crop in thumbnails)), "white")
+        sheet_draw = ImageDraw.Draw(sheet)
+        y = 0
+        for number, thumbnail in thumbnails:
+            sheet_draw.text((5, y + 4), f"L{number:02d}", fill="black")
+            sheet.paste(thumbnail, (50, y + 18))
+            y += thumbnail.height + 26
+        sheet.save(destination / "line_contact_sheet.jpg", quality=92)
+        record["status"] = "draft_segmented"
+    overview.thumbnail((1800, 1800), Image.Resampling.LANCZOS)
+    overview.save(destination / "page_review.jpg", quality=93)
+    record["artifacts"] = {file.relative_to(destination).as_posix(): digest(file)
+                           for file in destination.rglob("*") if file.is_file()}
+    atomic_json(destination / "page.json", record)
+    return record
+
+
+def select_pages(paths, selection):
+    if not selection:
+        return paths
+    numbers = set()
+    for group in selection.split(","):
+        ends = group.split("-")
+        if len(ends) == 1:
+            numbers.add(int(ends[0]))
+        elif len(ends) == 2:
+            start, stop = map(int, ends)
+            if start > stop:
+                raise ValueError("Page ranges must be increasing")
+            numbers.update(range(start, stop + 1))
+        else:
+            raise ValueError("Invalid page selection")
+    available = {int(path.stem.rsplit("_", 1)[1]): path for path in paths}
+    missing = numbers - available.keys()
+    if missing:
+        raise ValueError(f"Requested scan numbers absent: {sorted(missing)}")
+    return [available[number] for number in sorted(numbers)]
+
+
+def run(args):
+    source = args.input_dir.resolve()
+    output = args.output_dir.resolve()
+    if source == output or source in output.parents:
+        raise ValueError("Output must be outside the source image directory")
+    paths = select_pages(sorted(source.glob("*.png")), args.pages)
+    if not paths:
+        raise ValueError("No PNG scans found")
+    overrides = json.loads(args.overrides.read_text(encoding="utf-8")) if args.overrides else {}
+    binding = {"version": VERSION, "implementation_sha256": digest(Path(__file__)), "overrides": overrides}
+    output.mkdir(parents=True, exist_ok=True)
+    lock = output / ".segmentation.lock"
+    descriptor = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    os.close(descriptor)
+    records, errors = [], []
+    try:
+        identity_path = output / "run_identity.json"
+        identity = {"source": str(source), "scans": [path.name for path in paths], "settings": binding}
+        if identity_path.exists():
+            if json.loads(identity_path.read_text(encoding="utf-8")) != identity:
+                raise ValueError("This output directory belongs to another selection/settings; choose a new output directory")
+        else:
+            atomic_json(identity_path, identity)
+        pages_dir = output / "pages"
+        pages_dir.mkdir(exist_ok=True)
+        for position, path in enumerate(paths, start=1):
+            destination = pages_dir / path.stem
+            temporary = None
+            try:
+                if destination.exists():
+                    record = json.loads((destination / "page.json").read_text(encoding="utf-8"))
+                    if record["binding"] != binding or record["source_sha256"] != digest(path):
+                        raise ValueError("Existing output has different source/settings; choose a new output directory")
+                    if any(digest(destination / name) != checksum for name, checksum in record["artifacts"].items()):
+                        raise ValueError("Existing crop or preview changed; choose a new output directory")
+                else:
+                    temporary = Path(tempfile.mkdtemp(prefix=f".{path.stem}_", dir=pages_dir))
+                    record = export_page(path, temporary, overrides.get(path.stem, {}), binding)
+                    temporary.rename(destination)
+                    temporary = None
+                records.append(record)
+                print(f"[{position}/{len(paths)}] {path.stem}: {len(record['lines'])} draft lines, {len(record['flags'])} flags", flush=True)
+            except Exception as error:
+                errors.append({"source": str(path), "error": str(error)})
+                print(f"[{position}/{len(paths)}] {path.stem}: ERROR {error}", flush=True)
+            finally:
+                if temporary is not None:
+                    if temporary.resolve().parent != pages_dir.resolve() or not temporary.name.startswith(f".{path.stem}_"):
+                        raise ValueError("Temporary cleanup target is outside this page's output directory")
+                    shutil.rmtree(temporary)
+        summary = {
+            "version": VERSION, "source_directory": str(source), "selected_scans": len(paths),
+            "processed_scans": len(records), "draft_lines": sum(len(page["lines"]) for page in records),
+            "approved_lines": 0, "review_status": "All proposed boundaries require visual review",
+            "review_only_scans": [Path(page["source_file"]).name for page in records if page["status"] == "review_only"],
+            "flagged_scans": [Path(page["source_file"]).name for page in records if page["flags"]],
+            "errors": errors,
+        }
+        atomic_json(output / "summary.json", summary)
+        temporary_index = output / "line_index.csv.part"
+        with temporary_index.open("w", encoding="utf-8-sig", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=["line_id", "source_scan", "image_path", "review_status", "flags"])
+            writer.writeheader()
+            for page in records:
+                stem = Path(page["source_file"]).stem
+                for line in page["lines"]:
+                    writer.writerow({"line_id": line["line_id"], "source_scan": page["source_file"],
+                                     "image_path": f"pages/{stem}/{line['file']}", "review_status": "pending",
+                                     "flags": " | ".join(line["flags"])})
+        temporary_index.replace(output / "line_index.csv")
+        print(json.dumps(summary, ensure_ascii=True), flush=True)
+        return 1 if errors else 0
+    finally:
+        lock.unlink()
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--input-dir", type=Path, required=True)
+    parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--overrides", type=Path, help="JSON mapping scan stems to layout decisions")
+    parser.add_argument("--pages", help="Optional scan numbers, for example 2-5,20,129")
+    args = parser.parse_args()
+    try:
+        return run(args)
+    except (ValueError, OSError) as error:
+        parser.exit(1, f"Segmentation failed: {error}\n")
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

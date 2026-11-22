@@ -1,0 +1,11 @@
+{
+  "EAP272-1-2-11_0001": {
+    "action": "review_only",
+    "reason": "Cover with sparse diagonal handwritten notes. Requires a separate manual layout decision."
+  },
+  "EAP272-1-2-11_0129": {
+    "roi_fraction": [0.13, 0.18, 0.55, 0.28],
+    "headlines_fraction": [0.218],
+    "reason": "One short main-text line on the final scan."
+  }
+}

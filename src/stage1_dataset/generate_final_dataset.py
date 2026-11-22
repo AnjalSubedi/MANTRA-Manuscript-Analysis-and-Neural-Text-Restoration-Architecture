@@ -16,6 +16,8 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 from stage1_dataset.render_text_line import render_text_line
 from stage1_dataset.degradation_profiles import apply_degradation, DIFFICULTY_MAPPING
 from stage1_dataset.generate_synthetic_images import calculate_readability_metrics, normalize_devanagari_text, FONTS_TO_DOWNLOAD, ensure_fonts
+from stage1_dataset.font_policy import partition_fonts, font_is_allowed, font_split_errors, font_preserves_devanagari_digits
+from stage1_dataset.label_quality import load_approvals, require_reviewed_label
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
@@ -28,10 +30,13 @@ def select_font_and_check_coverage(text, requested_font_path, available_fonts, f
     requested_font_name = Path(requested_font_path).stem
     
     def cmap_supports(font_path):
+        if not font_preserves_devanagari_digits(font_path, text):
+            return False
         if font_path not in font_cmaps:
             from fontTools.ttLib import TTFont
             try:
-                font_cmaps[font_path] = TTFont(font_path).getBestCmap()
+                with TTFont(font_path) as font:
+                    font_cmaps[font_path] = font.getBestCmap()
             except Exception:
                 return False
         cmap = font_cmaps[font_path]
@@ -83,6 +88,8 @@ def render_worker_chunk(chunk_data):
             font_slug_map[f_path] = f_info["font_slug"]
             font_group_map[f_path] = f_info["font_group"]
 
+    fonts_by_split = partition_fonts(available_fonts, config)
+    approvals = load_approvals(config.get("label_review", {}).get("approved_labels_json"))
     font_cmaps = {}
     metadata_records = []
     
@@ -103,16 +110,20 @@ def render_worker_chunk(chunk_data):
         # Normalize text
         source_text_original = row["text"]
         source_text_normalized = normalize_devanagari_text(source_text_original)
+        require_reviewed_label(source_text_normalized, approvals)
         source_text_rendered = source_text_normalized
         digit_normalization_applied = "true" if source_text_original != source_text_normalized else "false"
         
         rng = random.Random(seed + global_idx)
         
         # Pick requested font and check coverage
-        requested_font_path = rng.choice(available_fonts)
+        split_fonts = fonts_by_split[split]
+        requested_font_path = rng.choice(split_fonts)
         actual_font_path, glyph_cov, fallback_used, req_font_name, act_font_name, missing_gl = select_font_and_check_coverage(
-            source_text_rendered, requested_font_path, available_fonts, font_cmaps
+            source_text_rendered, requested_font_path, split_fonts, font_cmaps
         )
+        if glyph_cov != "true":
+            raise ValueError(f"No allowed {split} font covers {line_id}: {missing_gl!r}")
         
         font_group = font_group_map[actual_font_path]
         font_slug = font_slug_map[actual_font_path]
@@ -174,6 +185,7 @@ def render_worker_chunk(chunk_data):
         degraded_img = None
         deg_params = None
         risk = False
+        is_clipped = True
         readability_score = 100.0
         
         for attempt in range(max_attempts):
@@ -204,7 +216,7 @@ def render_worker_chunk(chunk_data):
                     continue
                 break
                 
-        if degraded_img is None or risk:
+        if degraded_img is None or risk or is_clipped:
             # Fallback clean print
             degraded_img, deg_params = apply_degradation(
                 clean_img,
@@ -214,19 +226,21 @@ def render_worker_chunk(chunk_data):
                 attempt=0
             )
             risk, readability_score, _, _ = calculate_readability_metrics(degraded_img)
+            degradation_profile = "D0_clean_print"
+            degradation_family = "single"
             
         # Save image file
         save_dir = os.path.join(IMAGE_DIR, output_subdir, split)
         os.makedirs(save_dir, exist_ok=True)
         
-        img_filename = f"{line_id}_{suffix}.png"
+        img_filename = f"{line_id}_{suffix}_{global_idx:06d}.png"
         img_relative_path = os.path.join(IMAGE_DIR, output_subdir, split, img_filename)
         img_absolute_path = os.path.abspath(img_relative_path)
         
         degraded_img.save(img_absolute_path, "PNG")
         
         metadata_records.append({
-            "image_path": f"{output_subdir}/{split}/{img_filename}",
+            "image_path": Path(img_relative_path).as_posix(),
             "line_id": line_id,
             "source_id": source_id,
             "source_file": source_file,
@@ -237,7 +251,7 @@ def render_worker_chunk(chunk_data):
             "source_text_normalized": source_text_normalized,
             "source_text_rendered": source_text_rendered,
             "digit_normalization_applied": digit_normalization_applied,
-            "renderer": "chromium",
+            "renderer": renderer_used,
             "degradation_profile": degradation_profile,
             "degradation_family": degradation_family,
             "degradation_parameters_json": json.dumps(deg_params),
@@ -247,7 +261,11 @@ def render_worker_chunk(chunk_data):
             "font_fallback_used": fallback_used,
             "requested_font_name": req_font_name,
             "actual_font_name": act_font_name,
-            "missing_glyphs": missing_gl
+            "missing_glyphs": missing_gl,
+            "font_name": act_font_name,
+            "readability_score_estimate": readability_score,
+            "width": degraded_img.width,
+            "height": degraded_img.height,
         })
         
     # Shutdown local playwright
@@ -305,7 +323,7 @@ def run_parallel_generation(rows, output_subdir, suffix, seed, config_path, targ
             results.extend(res)
             
     logger.info(f"Completed parallel generation. Generated {len(results)} images in {output_subdir}.")
-    return results
+    return sorted(results, key=lambda row: row["image_path"])
 
 def main():
     print("=" * 70)
@@ -333,7 +351,8 @@ def main():
             font_group_map[f_path] = f_info["font_group"]
             
     # 2. Load merged labels
-    all_lines_csv = os.path.join(LABEL_DIR, "stage1_all_lines.csv")
+    fonts_by_split = partition_fonts(available_fonts, config)
+    all_lines_csv = config["paths"].get("final_labels", os.path.join(LABEL_DIR, "stage1_all_lines.csv"))
     if not os.path.exists(all_lines_csv):
         print(f"ERROR: Merged labels file not found: {all_lines_csv}")
         return
@@ -344,6 +363,12 @@ def main():
         for r in reader:
             all_rows.append(r)
     N = len(all_rows)
+    approvals = load_approvals(config.get("label_review", {}).get("approved_labels_json"))
+    for row in all_rows:
+        require_reviewed_label(normalize_devanagari_text(row["text"]), approvals)
+    desired_rows = {row["line_id"]: row for row in all_rows}
+    if len(desired_rows) != N:
+        raise ValueError("Final labels contain duplicate line IDs")
     print(f"Loaded N = {N} final merged labels from {all_lines_csv}")
     
     # 3. Pass A: Load existing successful core images metadata
@@ -354,9 +379,19 @@ def main():
         
     print("\n[Pass A] Loading existing successful core images metadata...")
     core_metadata_rows = []
+    reused_ids = set()
     with open(core_meta_csv, "r", encoding="utf-8") as f:
         reader = csv.DictReader(f)
         for r in reader:
+            wanted = desired_rows.get(r["line_id"])
+            if (not wanted or r["line_id"] in reused_ids
+                    or wanted["domain"].startswith("coverage_")
+                    or r["split"] != wanted["split"]
+                    or r["text"] != normalize_devanagari_text(wanted["text"])
+                    or not os.path.isfile(r["image_path"])
+                    or not font_is_allowed(r, fonts_by_split)):
+                continue
+            reused_ids.add(r["line_id"])
             mapped = {
                 "image_path": r["image_path"],
                 "line_id": r["line_id"],
@@ -381,7 +416,11 @@ def main():
                 "actual_font_name": r.get("font_name", "NotoSansDevanagari-Regular"),
                 "missing_glyphs": "",
                 "variant_index": 1,
-                "generation_round": "core_reuse"
+                "generation_round": "core_reuse",
+                "font_name": r.get("actual_font_name") or r.get("font_name", ""),
+                "readability_score_estimate": r.get("readability_score_estimate") or "100.0",
+                "width": r.get("width", ""),
+                "height": r.get("height", ""),
             }
             core_metadata_rows.append(mapped)
             
@@ -396,7 +435,8 @@ def main():
             core_rows.append(r)
             
     existing_core_ids = set(r["line_id"] for r in core_metadata_rows)
-    missing_core_rows = [r for r in core_rows if r["line_id"] not in existing_core_ids]
+    missing_core_rows = [r for r in all_rows if not r["domain"].startswith("coverage_")
+                         and r["line_id"] not in existing_core_ids]
     print(f"\n[Pass B Part 1] Identified {len(missing_core_rows)} missing core variant-1 rows.")
     
     for row in missing_core_rows:
@@ -412,7 +452,7 @@ def main():
     if missing_core_rows:
         missing_core_metadata = run_parallel_generation(
             missing_core_rows,
-            output_subdir="images_stage1_all_variant1_missing_core",
+            output_subdir="images/stage1_all_variant1_missing_core",
             suffix="v01",
             seed=base_seed + 1000000,
             config_path=config_path
@@ -436,7 +476,7 @@ def main():
     if coverage_rows:
         coverage_metadata = run_parallel_generation(
             coverage_rows,
-            output_subdir="images_stage1_all_variant1_coverage_only",
+            output_subdir="images/stage1_all_variant1_coverage_only",
             suffix="v01",
             seed=base_seed + 2000000,
             config_path=config_path
@@ -456,7 +496,7 @@ def main():
     print(f"\n[Pass C] Generating variant-2 images for all {N} rows in stage1_all_lines.csv...")
     variant2_metadata = run_parallel_generation(
         all_rows,
-        output_subdir="images_stage1_all_variant2",
+        output_subdir="images/stage1_all_variant2",
         suffix="v02",
         seed=base_seed + 3000000,
         config_path=config_path,
@@ -526,7 +566,7 @@ def main():
         
         topup_metadata = run_parallel_generation(
             sampled,
-            output_subdir="images_stage1_all_topup",
+            output_subdir="images/stage1_all_topup",
             suffix="v03",
             seed=base_seed + 4000000,
             config_path=config_path,
@@ -559,7 +599,7 @@ def main():
     print("\nVerifying constraints and physical existence...")
     not_exists = []
     for idx, r in enumerate(final_combined_rows):
-        path = os.path.join(IMAGE_DIR, r["image_path"])
+        path = r["image_path"]
         if not os.path.exists(path):
             not_exists.append(path)
             
@@ -576,6 +616,8 @@ def main():
     else:
         print(f"FAIL: Total image count is {total_images} (expected 100,000)!")
         
+    if not_exists or total_images != 100000 or font_split_errors(final_combined_rows, config):
+        raise RuntimeError("Generation failed dataset QA; existing final metadata was preserved")
     # Save unified metadata
     final_meta_csv = os.path.join(METADATA_DIR, "synthetic_image_metadata_stage1_all_final.csv")
     fieldnames = [
@@ -583,12 +625,15 @@ def main():
         "source_text_original", "source_text_normalized", "source_text_rendered", "digit_normalization_applied",
         "renderer", "degradation_profile", "degradation_family", "degradation_parameters_json",
         "difficulty_bucket", "unreadable_risk", "glyph_coverage_passed", "font_fallback_used",
-        "requested_font_name", "actual_font_name", "missing_glyphs", "variant_index", "generation_round"
+        "requested_font_name", "actual_font_name", "missing_glyphs", "variant_index", "generation_round",
+        "font_name", "readability_score_estimate", "width", "height"
     ]
-    with open(final_meta_csv, "w", encoding="utf-8", newline="") as f:
+    temporary_metadata = Path(final_meta_csv).with_suffix(".tmp")
+    with temporary_metadata.open("w", encoding="utf-8", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(final_combined_rows)
+    temporary_metadata.replace(final_meta_csv)
     print(f"Saved final unified metadata to {final_meta_csv}")
     print("=" * 70)
     print("ALL GENERATION TASKS COMPLETED")

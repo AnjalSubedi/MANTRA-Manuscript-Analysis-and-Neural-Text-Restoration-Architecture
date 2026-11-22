@@ -16,6 +16,8 @@ paths:
   label_dir: data/stage1_synthetic/labels
   metadata_dir: data/stage1_synthetic/metadata
   report_dir: data/stage1_synthetic/reports
+  final_metadata: data/stage1_synthetic/releases/label_review_v1/metadata.csv
+  final_labels: data/stage1_synthetic/releases/label_review_v1/labels.csv
 
 composition:
   natural_text_lines: 70000
@@ -58,6 +60,10 @@ font_split:
   use_font_aware_split: true
   heldout_val_fonts: 2
   heldout_test_fonts: 2
+  # Explicit assignments keep existing datasets and future runs consistent.
+  # Each held-out group includes fonts covering the complete label charset.
+  val_fonts: [Biryani-Regular, Jaldi-Regular]
+  test_fonts: [Mukta-Regular, NotoSerifDevanagari-Regular]
 
 source_split:
   use_source_aware_split: true
@@ -129,3 +135,6 @@ quality_control:
   inspect_random_test_samples: 50
   inspect_rare_conjunct_samples: 100
   inspect_high_degradation_samples: 50
+
+label_review:
+  approved_labels_json: data/stage1_synthetic/releases/label_review_v1/review/approved_labels.json

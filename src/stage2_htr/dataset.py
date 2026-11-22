@@ -9,6 +9,8 @@ encoded CTC labels, and rich per-sample metadata.
 import csv
 import json
 import logging
+from pathlib import Path
+from PIL import Image
 import torch
 from torch.utils.data import Dataset
 
@@ -92,6 +94,13 @@ class HTRLineDataset(Dataset):
     return_metadata : bool
         If True (default), each sample dict includes rich metadata fields
         (domain, font_name, degradation_profile, …).
+    invert_image : bool
+        Invert pixels so text is bright and the background is dark.
+    project_root : str | None
+        Base for project-relative image paths; defaults to the repository root.
+
+    Width-filtered rows are available in ``skipped_rows``. ``source_row_count``
+    includes them, while ``len(dataset)`` counts only loadable-width rows.
     """
 
     def __init__(
@@ -102,12 +111,20 @@ class HTRLineDataset(Dataset):
         max_width: int | None = None,
         augment: bool = False,
         return_metadata: bool = True,
+        invert_image: bool = False,
+        project_root: str | None = None,
     ):
         super().__init__()
         self.image_height = image_height
         self.max_width = max_width
         self.augment = augment
         self.return_metadata = return_metadata
+        self.invert_image = invert_image
+        self.project_root = Path(project_root) if project_root else Path(__file__).resolve().parents[2]
+        if image_height <= 0 or (max_width is not None and max_width <= 0):
+            raise ValueError("image_height and max_width must be positive")
+        if augment:
+            raise ValueError("Augmentation is not implemented in Stage 2.3")
 
         # Load charset -------------------------------------------------
         with open(charset_json, "r", encoding="utf-8") as f:
@@ -121,9 +138,32 @@ class HTRLineDataset(Dataset):
 
         # Load manifest rows -------------------------------------------
         self.rows: list[dict[str, str]] = []
+        self.skipped_rows: list[dict] = []
+        self.source_row_count = 0
         with open(manifest_csv, "r", encoding="utf-8") as f:
             reader = csv.DictReader(f)
             for row in reader:
+                self.source_row_count += 1
+                if max_width is not None:
+                    try:
+                        # Check actual image dimensions rather than trusting
+                        # possibly stale metadata. No pixel resize is needed.
+                        with Image.open(self.resolve_image_path(row["image_path"])) as img:
+                            width = max(1, round(img.width * (image_height / img.height)))
+                            if width > max_width:
+                                # A readable header must not hide a damaged
+                                # over-wide file from the inspection report.
+                                img.load()
+                        if width > max_width:
+                            self.skipped_rows.append({
+                                "image_path": row["image_path"],
+                                "processed_width": width,
+                            })
+                            continue
+                    except (OSError, ValueError):
+                        # Keep unreadable files so inspection can report their
+                        # load failure rather than hide them as width skips.
+                        pass
                 self.rows.append(row)
 
         logger.info(
@@ -132,6 +172,9 @@ class HTRLineDataset(Dataset):
         )
 
     # ---- public helpers exposed for external use ----
+
+    def resolve_image_path(self, path: str) -> Path:
+        return self.project_root / path
 
     def encode(self, text: str) -> list[int]:
         """Encode text using this dataset's charset."""
@@ -153,18 +196,15 @@ class HTRLineDataset(Dataset):
 
         # Image preprocessing -------------------------------------------
         tensor, original_size, processed_size = preprocess_image(
-            path=image_path,
+            path=self.resolve_image_path(image_path),
             target_height=self.image_height,
             max_width=self.max_width,
-            invert=False,  # controlled by config; default = no invert
+            invert=self.invert_image,
         )
 
         if tensor is None:
-            # Over-wide image was skipped — return a sentinel so the
-            # caller / collate can filter.  This should be rare with
-            # max_width=None (default).
             raise RuntimeError(
-                f"Image skipped (too wide after resize): {image_path}"
+                f"Image dimensions changed after width filtering: {image_path}"
             )
 
         # Label encoding ------------------------------------------------

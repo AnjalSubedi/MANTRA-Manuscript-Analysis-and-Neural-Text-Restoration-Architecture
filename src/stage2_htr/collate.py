@@ -45,6 +45,8 @@ def htr_collate_fn(batch: list[dict], pad_value: float = 1.0) -> dict:
         degradation_profiles – list[str]
         difficulty_buckets   – list[str]
     """
+    if not batch:
+        raise ValueError("Cannot collate an empty batch")
     # Determine max width in this batch
     max_w = max(s["image"].shape[2] for s in batch)
     height = batch[0]["image"].shape[1]  # all are target_height (64)
@@ -68,7 +70,7 @@ def htr_collate_fn(batch: list[dict], pad_value: float = 1.0) -> dict:
         # Right-pad to max_w
         if w_i < max_w:
             pad_tensor = torch.full(
-                (1, height, max_w - w_i), pad_value, dtype=img.dtype
+                (1, height, max_w - w_i), pad_value, dtype=img.dtype, device=img.device
             )
             img = torch.cat([img, pad_tensor], dim=2)
 

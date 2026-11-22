@@ -70,6 +70,8 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from stage1_dataset.render_text_line import render_text_line, run_shaping_smoke_test, PIL_has_raqm
 from stage1_dataset.degradation_profiles import apply_degradation, DIFFICULTY_MAPPING
+from stage1_dataset.font_policy import partition_fonts
+from stage1_dataset.label_quality import load_approvals, require_reviewed_label
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
@@ -271,6 +273,7 @@ def main():
     
     # 1. Load config
     config = load_yaml_config(args.config)
+    approvals = load_approvals(config.get("label_review", {}).get("approved_labels_json"))
     seed = args.seed if args.seed is not None else config["dataset"].get("random_seed", 42)
     random.seed(seed)
     
@@ -326,6 +329,7 @@ def main():
             font_slug_map[f_path] = f_info["font_slug"]
             font_group_map[f_path] = f_info["font_group"]
             
+    fonts_by_split = partition_fonts(available_fonts, config)
     if not available_fonts:
         logger.critical("No fonts available in data/stage1_synthetic/fonts/.")
         sys.exit(1)
@@ -516,6 +520,7 @@ def main():
         # Verify text source and normalize
         source_text_original = row["text"]
         source_text_normalized = normalize_devanagari_text(source_text_original)
+        require_reviewed_label(source_text_normalized, approvals)
         source_text_rendered = source_text_normalized
         digit_normalization_applied = "true" if source_text_original != source_text_normalized else "false"
         
@@ -539,7 +544,11 @@ def main():
         # Pick parameters deterministically using row index + base seed
         param_rand.seed(seed + idx)
         
-        font_path = param_rand.choice(available_fonts)
+        from stage1_dataset.render_text_line import check_font_supports_text
+        split_fonts = [p for p in fonts_by_split[split] if check_font_supports_text(p, source_text_rendered)]
+        if not split_fonts:
+            raise ValueError(f"No allowed {split} font covers {line_id}")
+        font_path = param_rand.choice(split_fonts)
         font_name = Path(font_path).stem
         font_group = font_group_map[font_path]
         font_slug = font_slug_map[font_path]

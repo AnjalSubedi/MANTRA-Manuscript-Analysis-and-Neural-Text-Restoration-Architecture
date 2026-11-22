@@ -11,6 +11,8 @@ import json
 import argparse
 import re
 import unicodedata
+from pathlib import Path
+import yaml
 from collections import Counter
 
 def get_char_sort_key(char):
@@ -77,23 +79,28 @@ def main():
     parser.add_argument(
         "--manifest",
         type=str,
-        default="data/stage2_htr/manifests/htr_all.csv",
+        default=None,
         help="Path to the unified HTR manifest file"
     )
     parser.add_argument(
         "--output-dir",
         type=str,
-        default="data/stage2_htr/vocab",
+        default=None,
         help="Directory to save output vocabulary files"
     )
     parser.add_argument(
         "--report-dir",
         type=str,
-        default="data/stage2_htr/reports",
+        default=None,
         help="Directory to save QA report files"
     )
     
+    parser.add_argument("--config", default="configs/stage2_data_synth100k.yaml")
     args = parser.parse_args()
+    config = yaml.safe_load(Path(args.config).read_text(encoding="utf-8"))
+    args.manifest = args.manifest or config["paths"]["manifest_all"]
+    args.output_dir = args.output_dir or str(Path(config["paths"]["charset_json"]).parent)
+    args.report_dir = args.report_dir or str(Path(args.manifest).parent.parent / "reports")
     
     # Enforce UTF-8 output on standard streams (especially on Windows)
     try:
