@@ -6,7 +6,9 @@ It preserves source pixels inside polygons and writes white outside them.
 """
 
 import argparse
+from collections import Counter
 import csv
+from dataclasses import dataclass
 import hashlib
 import json
 import math
@@ -19,10 +21,87 @@ import time
 
 import cv2
 import numpy as np
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageOps
 
 
-VERSION = "2"
+VERSION = "3"
+SUPPORTED_EXTENSIONS = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".webp", ".jp2", ".j2k"}
+
+
+@dataclass(frozen=True)
+class ScanPage:
+    source: Path
+    frame_index: int
+    frame_count: int
+    stem: str
+    error: str = ""
+
+
+def discover_pages(source):
+    """Expand scan files in natural filename order, preserving bad inputs as errors."""
+    paths = sorted(
+        (path for path in source.iterdir() if path.is_file() and path.suffix.lower() in SUPPORTED_EXTENSIONS),
+        key=lambda path: [int(part) if part.isdigit() else part.casefold()
+                          for part in re.split(r"(\d+)", path.name)],
+    )
+    pages = []
+    for path in paths:
+        try:
+            with Image.open(path) as image:
+                count = image.n_frames if hasattr(image, "n_frames") else 1
+            for frame in range(count):
+                stem = path.stem if count == 1 else f"{path.stem}_page{frame + 1:04d}"
+                pages.append(ScanPage(path, frame, count, stem))
+        except (OSError, ValueError, EOFError) as error:
+            pages.append(ScanPage(path, 0, 0, path.stem, str(error)))
+    counts = Counter(page.stem.casefold() for page in pages)
+    identified = []
+    for page in pages:
+        stem = page.stem
+        if counts[stem.casefold()] > 1:
+            suffix = hashlib.sha256(page.source.name.encode("utf-8")).hexdigest()[:12]
+            stem = f"{stem}__{suffix}"
+        identified.append(ScanPage(page.source, page.frame_index, page.frame_count, stem, page.error))
+    if len({page.stem.casefold() for page in identified}) != len(identified):
+        raise ValueError("Input filenames produce duplicate page IDs; rename the conflicting files")
+    return identified
+
+
+def normalize_scan(scan, destination):
+    """Convert one source frame to RGB and save a PNG when normalization is needed."""
+    with Image.open(scan.source) as opened:
+        opened.seek(scan.frame_index)
+        source_format = opened.format
+        source_mode = opened.mode
+        source_size = list(opened.size)
+        orientation = int(opened.getexif().get(274, 1))
+        image = ImageOps.exif_transpose(opened)
+        conversion = []
+        if orientation != 1:
+            conversion.append(f"EXIF orientation {orientation} applied")
+        if image.mode.startswith("I;16"):
+            values = np.asarray(image).astype(np.uint32)
+            image = Image.fromarray(((values + 128) // 257).astype(np.uint8))
+            conversion.append("16-bit grayscale scaled to 8-bit using the full 0..65535 range")
+        if image.mode in {"I", "F"}:
+            raise ValueError(f"Unsupported {image.mode} pixel mode; supply an explicitly mapped 8-bit or 16-bit scan")
+        if "A" in image.getbands() or "transparency" in image.info:
+            background = Image.new("RGBA", image.size, "white")
+            image = Image.alpha_composite(background, image.convert("RGBA"))
+            conversion.append("Transparency composited on white")
+        image = image.convert("RGB")
+        if source_mode != "RGB":
+            conversion.append(f"Source mode {source_mode} converted to RGB")
+        normalized_png = str(scan.source.resolve())
+        if source_format != "PNG" or scan.frame_count != 1 or orientation != 1 or source_mode not in {"RGB", "L", "1"}:
+            normalized_png = "normalized.png"
+            image.save(destination / normalized_png, format="PNG")
+    return image, {
+        "source_format": source_format, "source_mode": source_mode,
+        "source_size": source_size, "source_frame_index": scan.frame_index,
+        "source_frame_count": scan.frame_count, "normalized_png": normalized_png,
+        "normalized_size": list(image.size), "normalization": conversion,
+    }
 
 
 def digest(path):
@@ -227,16 +306,15 @@ def crop_polygon(image, left, right, top, bottom):
     return Image.fromarray(result), [left, min_y, right, max_y], polygon
 
 
-def export_page(path, destination, override, binding):
-    with Image.open(path) as opened:
-        opened.load()
-        image = opened.convert("RGB")
+def export_page(path, destination, override, binding, scan=None, source_checksum=None):
+    scan = scan or ScanPage(path, 0, 1, path.stem)
+    image, normalization = normalize_scan(scan, destination)
     record = {
-        "source_file": str(path.resolve()), "source_sha256": digest(path),
-        "source_size": list(image.size), "binding": binding,
+        "source_file": str(path.resolve()), "source_sha256": source_checksum or digest(path),
+        **normalization, "page_id": scan.stem, "binding": binding,
         "review_status": "pending", "flags": [], "lines": [],
         "scope": "Main text block; marginal notes and folio numbers need separate review",
-        "coordinate_system": "Original pixels, top-left origin, exclusive right/bottom bbox",
+        "coordinate_system": "Normalized PNG pixels, top-left origin, exclusive right/bottom bbox",
     }
     overview = image.copy()
     draw = ImageDraw.Draw(overview)
@@ -266,7 +344,7 @@ def export_page(path, destination, override, binding):
         thumbnails = []
         for number, (upper, lower) in enumerate(zip(boundaries, boundaries[1:]), start=1):
             crop, box, polygon = crop_polygon(image, left, right, upper, lower)
-            filename = f"{path.stem}_line{number:02d}.png"
+            filename = f"{scan.stem}_line{number:02d}.png"
             crop.save(lines_dir / filename)
             line_flags = []
             edge_hits = [0.0 if number == 1 else crossings[number - 2],
@@ -280,7 +358,7 @@ def export_page(path, destination, override, binding):
                 "sha256": digest(lines_dir / filename), "bbox_xyxy": box,
                 "polygon_xy": polygon, "review_status": "pending", "flags": line_flags,
                 "boundary_ink_fraction_top_bottom": edge_hits,
-                "pixels": "Source RGB inside polygon; white outside; no resampling",
+                "pixels": "Normalized RGB inside polygon; white outside; no spatial resampling",
             })
             draw.line([tuple(point) for point in polygon + [polygon[0]]], fill=(220, 35, 35), width=max(1, image.width // 800))
             draw.text((min(right + 4, image.width - 35), int(np.mean(upper))),
@@ -349,7 +427,14 @@ def select_pages(paths, selection):
             numbers.update(range(start, stop + 1))
         else:
             raise ValueError("Invalid page selection")
-    available = {extract_page_num(path): path for path in paths}
+    try:
+        labels = [extract_page_num(Path(path.stem + ".png")) for path in paths]
+    except ValueError:
+        labels = []
+    if len(labels) == len(paths) and len(set(labels)) == len(paths):
+        available = dict(zip(labels, paths))
+    else:
+        available = dict(enumerate(paths, start=1))
     missing = numbers - available.keys()
     if missing:
         raise ValueError(f"Requested scan numbers absent: {sorted(missing)}")
@@ -361,11 +446,9 @@ def run(args):
     output = args.output_dir.resolve()
     if source == output or source in output.parents:
         raise ValueError("Output must be outside the source image directory")
-    image_extensions = {".png", ".jpg", ".jpeg", ".tif", ".tiff"}
-    all_scans = sorted([p for p in source.iterdir() if p.is_file() and p.suffix.lower() in image_extensions])
-    paths = select_pages(all_scans, args.pages)
-    if not paths:
-        raise ValueError(f"No scan images found in {source}")
+    scans = select_pages(discover_pages(source), args.pages)
+    if not scans:
+        raise ValueError(f"No supported scan images found. Extensions: {', '.join(sorted(SUPPORTED_EXTENSIONS))}")
     overrides = json.loads(args.overrides.read_text(encoding="utf-8")) if args.overrides else {}
     binding = {"version": VERSION, "implementation_sha256": digest(Path(__file__)), "overrides": overrides}
     output.mkdir(parents=True, exist_ok=True)
@@ -373,9 +456,13 @@ def run(args):
     descriptor = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
     os.close(descriptor)
     records, errors = [], []
+    source_hashes = {}
     try:
         identity_path = output / "run_identity.json"
-        identity = {"source": str(source), "scans": [path.name for path in paths], "settings": binding}
+        identity = {"source": str(source), "scans": [
+            {"file": scan.source.name, "frame_index": scan.frame_index, "page_id": scan.stem}
+            for scan in scans
+        ], "settings": binding}
         if identity_path.exists():
             if json.loads(identity_path.read_text(encoding="utf-8")) != identity:
                 raise ValueError("This output directory belongs to another selection/settings; choose a new output directory")
@@ -383,41 +470,56 @@ def run(args):
             atomic_json(identity_path, identity)
         pages_dir = output / "pages"
         pages_dir.mkdir(exist_ok=True)
-        for position, path in enumerate(paths, start=1):
-            destination = pages_dir / path.stem
+        for position, scan in enumerate(scans, start=1):
+            path = scan.source
+            destination = pages_dir / scan.stem
             temporary = None
             try:
+                if scan.error:
+                    raise ValueError(f"Could not read scan: {scan.error}")
+                state = (path.stat().st_size, path.stat().st_mtime_ns)
+                if path not in source_hashes:
+                    source_hashes[path] = (digest(path), state)
+                source_checksum, original_state = source_hashes[path]
+                if state != original_state:
+                    raise ValueError("Source file changed during processing")
                 if destination.exists():
                     record = json.loads((destination / "page.json").read_text(encoding="utf-8"))
-                    if record["binding"] != binding or record["source_sha256"] != digest(path):
+                    if record["binding"] != binding or record["source_sha256"] != source_checksum:
                         raise ValueError("Existing output has different source/settings; choose a new output directory")
                     if any(digest(destination / name) != checksum for name, checksum in record["artifacts"].items()):
                         raise ValueError("Existing crop or preview changed; choose a new output directory")
                 else:
-                    temporary = Path(tempfile.mkdtemp(prefix=f".{path.stem}_", dir=pages_dir))
-                    override = get_override_for_path(path, overrides)
-                    record = export_page(path, temporary, override, binding)
+                    temporary = Path(tempfile.mkdtemp(prefix=f".{scan.stem}_", dir=pages_dir))
+                    override = get_override_for_path(Path(scan.stem + ".png"), overrides)
+                    record = export_page(path, temporary, override, binding,
+                                         scan=scan, source_checksum=source_checksum)
+                    if (path.stat().st_size, path.stat().st_mtime_ns) != original_state:
+                        raise ValueError("Source file changed during processing")
                     for attempt in range(5):
                         try:
                             temporary.rename(destination)
                             break
                         except (PermissionError, OSError):
                             if attempt == 4:
+                                if (temporary.resolve().parent != pages_dir.resolve()
+                                        or destination.resolve().parent != pages_dir.resolve()):
+                                    raise ValueError("Page move target is outside the output directory")
                                 shutil.move(str(temporary), str(destination))
                             time.sleep(0.1)
                     temporary = None
                 records.append(record)
-                print(f"[{position}/{len(paths)}] {path.stem}: {len(record['lines'])} draft lines, {len(record['flags'])} flags", flush=True)
+                print(f"[{position}/{len(scans)}] {scan.stem}: {len(record['lines'])} draft lines, {len(record['flags'])} flags", flush=True)
             except Exception as error:
-                errors.append({"source": str(path), "error": str(error)})
-                print(f"[{position}/{len(paths)}] {path.stem}: ERROR {error}", flush=True)
+                errors.append({"source": str(path), "frame_index": scan.frame_index, "error": str(error)})
+                print(f"[{position}/{len(scans)}] {scan.stem}: ERROR {error}", flush=True)
             finally:
                 if temporary is not None:
-                    if temporary.resolve().parent != pages_dir.resolve() or not temporary.name.startswith(f".{path.stem}_"):
+                    if temporary.resolve().parent != pages_dir.resolve() or not temporary.name.startswith(f".{scan.stem}_"):
                         raise ValueError("Temporary cleanup target is outside this page's output directory")
                     shutil.rmtree(temporary)
         summary = {
-            "version": VERSION, "source_directory": str(source), "selected_scans": len(paths),
+            "version": VERSION, "source_directory": str(source), "selected_scans": len(scans),
             "processed_scans": len(records), "draft_lines": sum(len(page["lines"]) for page in records),
             "approved_lines": 0, "review_status": "All proposed boundaries require visual review",
             "review_only_scans": [Path(page["source_file"]).name for page in records if page["status"] == "review_only"],
@@ -427,12 +529,16 @@ def run(args):
         atomic_json(output / "summary.json", summary)
         temporary_index = output / "line_index.csv.part"
         with temporary_index.open("w", encoding="utf-8-sig", newline="") as handle:
-            writer = csv.DictWriter(handle, fieldnames=["line_id", "source_scan", "image_path", "review_status", "flags"])
+            writer = csv.DictWriter(handle, fieldnames=["line_id", "source_scan", "source_frame", "normalized_png", "image_path", "review_status", "flags"])
             writer.writeheader()
             for page in records:
-                stem = Path(page["source_file"]).stem
+                stem = page["page_id"]
+                normalized = page["normalized_png"]
+                if not Path(normalized).is_absolute():
+                    normalized = f"pages/{stem}/{normalized}"
                 for line in page["lines"]:
                     writer.writerow({"line_id": line["line_id"], "source_scan": page["source_file"],
+                                     "source_frame": page["source_frame_index"] + 1, "normalized_png": normalized,
                                      "image_path": f"pages/{stem}/{line['file']}", "review_status": "pending",
                                      "flags": " | ".join(line["flags"])})
         temporary_index.replace(output / "line_index.csv")
@@ -444,10 +550,11 @@ def run(args):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--input-dir", type=Path, required=True)
+    parser.add_argument("--input-dir", type=Path, required=True,
+                        help="Folder of PNG, JPEG, TIFF, BMP, WebP or JPEG 2000 scans; multi-page files are expanded")
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--overrides", type=Path, help="JSON mapping scan stems to layout decisions")
-    parser.add_argument("--pages", help="Optional scan numbers, for example 2-5,20,129")
+    parser.add_argument("--pages", help="Scan suffix numbers when unique, otherwise 1-based expanded page positions; e.g. 2-5,20")
     args = parser.parse_args()
     try:
         return run(args)

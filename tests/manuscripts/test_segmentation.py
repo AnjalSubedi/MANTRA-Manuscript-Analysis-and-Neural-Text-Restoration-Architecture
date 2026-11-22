@@ -1,12 +1,18 @@
 """Regression checks for source geometry and preservation of close line marks."""
 
+from argparse import Namespace
+import csv
+import json
 from pathlib import Path
 
 import numpy as np
 from PIL import Image
 import pytest
 
-from manuscripts.segment_lines import crop_polygon, detection_gray, gap_path, largest_band, line_headlines, select_pages
+from manuscripts.segment_lines import (
+    crop_polygon, detection_gray, discover_pages, gap_path, largest_band,
+    line_headlines, normalize_scan, run, select_pages,
+)
 
 
 def test_gap_follows_space_between_descender_and_next_line_matra():
@@ -75,3 +81,185 @@ def test_folio_number_is_not_joined_to_main_text_across_a_margin_gap():
     columns[2:8] = True
     columns[23:90] = True
     assert largest_band(columns, 7, horizontal=True) == (23, 90)
+
+
+@pytest.mark.parametrize("extension,format", [
+    (".JPG", "JPEG"), (".jpeg", "JPEG"), (".TIFF", "TIFF"),
+    (".bmp", "BMP"), (".webp", "WEBP"), (".jp2", "JPEG2000"),
+])
+def test_scan_formats_convert_to_png_at_original_dimensions(tmp_path, extension, format):
+    source = tmp_path / "inputs"
+    source.mkdir()
+    path = source / ("scan" + extension)
+    Image.new("RGB", (73, 41), (190, 180, 170)).save(path, format=format)
+    destination = tmp_path / "page"
+    destination.mkdir()
+    scan = discover_pages(source)[0]
+    image, metadata = normalize_scan(scan, destination)
+    normalized = Image.open(destination / metadata["normalized_png"])
+    assert normalized.format == "PNG"
+    assert image.size == normalized.size == (73, 41)
+    assert path.exists()
+    assert metadata["source_frame_index"] == 0
+    assert metadata["source_frame_count"] == 1
+
+
+def test_png_inputs_keep_ids_and_need_no_duplicate_conversion(tmp_path):
+    source = tmp_path / "inputs"
+    source.mkdir()
+    Image.new("RGB", (30, 20)).save(source / "scan_0001.PNG")
+    destination = tmp_path / "page"
+    destination.mkdir()
+    scan = discover_pages(source)[0]
+    assert scan.stem == "scan_0001"
+    _, metadata = normalize_scan(scan, destination)
+    assert Path(metadata["normalized_png"]) == scan.source.resolve()
+    assert not (destination / "normalized.png").exists()
+
+
+def test_multipage_tiff_preserves_frame_order_and_pixels(tmp_path):
+    source = tmp_path / "inputs"
+    source.mkdir()
+    first = Image.new("RGB", (80, 40), (20, 30, 40))
+    second = Image.new("RGB", (61, 39), (90, 100, 110))
+    first.save(source / "book.tif", save_all=True, append_images=[second])
+    scans = discover_pages(source)
+    assert [scan.stem for scan in scans] == ["book_page0001", "book_page0002"]
+    assert [scan.frame_index for scan in scans] == [0, 1]
+    for scan, expected in zip(scans, [first, second]):
+        destination = tmp_path / scan.stem
+        destination.mkdir()
+        image, metadata = normalize_scan(scan, destination)
+        np.testing.assert_array_equal(np.asarray(image), np.asarray(expected))
+        assert metadata["source_frame_count"] == 2
+
+
+def test_mixed_formats_and_colliding_stems_get_distinct_stable_ids(tmp_path):
+    for name in ["scan_1.png", "scan_1.jpg", "scan_2.bmp", "scan_10.tif"]:
+        Image.new("RGB", (30, 20)).save(tmp_path / name)
+    scans = discover_pages(tmp_path)
+    assert len({scan.stem.casefold() for scan in scans}) == 4
+    assert [scan.source.name for scan in scans][-2:] == ["scan_2.bmp", "scan_10.tif"]
+    assert [scan.stem for scan in scans] == [scan.stem for scan in discover_pages(tmp_path)]
+    assert select_pages(scans, "2-3") == scans[1:3]
+
+
+def test_exif_orientation_is_applied_before_segmentation(tmp_path):
+    source = tmp_path / "inputs"
+    source.mkdir()
+    exif = Image.Exif()
+    exif[274] = 6
+    Image.new("RGB", (80, 40)).save(source / "rotated.jpg", exif=exif)
+    destination = tmp_path / "page"
+    destination.mkdir()
+    image, metadata = normalize_scan(discover_pages(source)[0], destination)
+    assert metadata["source_size"] == [80, 40]
+    assert image.size == (40, 80)
+    assert metadata["normalized_size"] == [40, 80]
+
+
+def test_transparent_and_16bit_scans_have_explicit_rgb_normalization(tmp_path):
+    source = tmp_path / "inputs"
+    source.mkdir()
+    Image.new("RGBA", (20, 15), (0, 0, 0, 0)).save(source / "alpha.png")
+    values = np.array([[0, 32768, 65535]], dtype=np.uint16)
+    Image.fromarray(values).save(source / "gray.tif")
+    scans = discover_pages(source)
+    for scan in scans:
+        destination = tmp_path / scan.stem
+        destination.mkdir()
+        image, metadata = normalize_scan(scan, destination)
+        assert metadata["normalization"]
+        if scan.source.name == "alpha.png":
+            assert np.all(np.asarray(image) == 255)
+        else:
+            np.testing.assert_array_equal(np.asarray(image)[0, :, 0], [0, 128, 255])
+
+
+def test_cli_run_converts_tiff_and_jpeg_and_can_resume(tmp_path):
+    source = tmp_path / "inputs"
+    source.mkdir()
+    first = Image.new("RGB", (140, 80), "white")
+    second = Image.new("RGB", (150, 90), "ivory")
+    first.save(source / "book.tiff", save_all=True, append_images=[second])
+    first.save(source / "scan.jpg")
+    overrides = tmp_path / "overrides.json"
+    overrides.write_text(json.dumps({
+        name: {"roi_fraction": [0.1, 0.1, 0.9, 0.9], "headlines_fraction": [0.4]}
+        for name in ["book_page0001", "book_page0002", "scan"]
+    }), encoding="utf-8")
+    output = tmp_path / "output"
+    args = Namespace(input_dir=source, output_dir=output, pages=None, overrides=overrides)
+    assert run(args) == 0
+    summary = json.loads((output / "summary.json").read_text(encoding="utf-8"))
+    assert summary["selected_scans"] == summary["processed_scans"] == summary["draft_lines"] == 3
+    with (output / "line_index.csv").open(encoding="utf-8-sig", newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    assert [row["source_frame"] for row in rows] == ["1", "2", "1"]
+    for row in rows:
+        assert (output / row["normalized_png"]).exists()
+        assert (output / row["image_path"]).exists()
+    stamps = {path: path.stat().st_mtime_ns for path in output.rglob("*.png")}
+    assert run(args) == 0
+    assert {path: path.stat().st_mtime_ns for path in stamps} == stamps
+    normalized = output / rows[0]["normalized_png"]
+    Image.new("RGB", (140, 80), "black").save(normalized)
+    assert run(args) == 1
+    assert "changed" in json.loads((output / "summary.json").read_text(encoding="utf-8"))["errors"][0]["error"]
+
+
+def test_bad_scan_is_reported_while_valid_inputs_finish(tmp_path):
+    source = tmp_path / "inputs"
+    source.mkdir()
+    (source / "bad.tif").write_bytes(b"broken scan")
+    Image.new("RGB", (120, 60), "white").save(source / "good.bmp")
+    overrides = tmp_path / "overrides.json"
+    overrides.write_text(json.dumps({"good": {"action": "review_only"}}), encoding="utf-8")
+    output = tmp_path / "output"
+    assert run(Namespace(input_dir=source, output_dir=output, pages=None, overrides=overrides)) == 1
+    summary = json.loads((output / "summary.json").read_text(encoding="utf-8"))
+    assert summary["selected_scans"] == 2
+    assert summary["processed_scans"] == 1
+    assert len(summary["errors"]) == 1
+    assert (output / "pages/good/normalized.png").exists()
+
+
+def test_bare_numeric_names_keep_suffix_page_selection():
+    paths = [Path("0003.jpg"), Path("0007.tif")]
+    assert select_pages(paths, "7") == [paths[1]]
+
+
+def test_flexible_collection_overrides_apply_after_conversion(tmp_path):
+    source = tmp_path / "inputs"
+    source.mkdir()
+    Image.new("RGB", (120, 60), "white").save(source / "EAP272_1_2_11_0001.JPG")
+    overrides = tmp_path / "overrides.json"
+    overrides.write_text(json.dumps({"EAP272-1-2-11_0001": {"action": "review_only"}}), encoding="utf-8")
+    output = tmp_path / "output"
+    assert run(Namespace(input_dir=source, output_dir=output, pages=None, overrides=overrides)) == 0
+    page = json.loads((output / "pages/EAP272_1_2_11_0001/page.json").read_text(encoding="utf-8"))
+    assert page["status"] == "review_only"
+    assert page["normalized_png"] == "normalized.png"
+
+
+def test_converted_page_publication_retries_a_transient_windows_lock(tmp_path, monkeypatch):
+    source = tmp_path / "inputs"
+    source.mkdir()
+    Image.new("RGB", (120, 60), "white").save(source / "scan.jpg")
+    overrides = tmp_path / "overrides.json"
+    overrides.write_text(json.dumps({"scan": {"action": "review_only"}}), encoding="utf-8")
+    original_rename = Path.rename
+    attempts = []
+
+    def retry_once(path, target):
+        if path.name.startswith(".scan_"):
+            attempts.append(path)
+            if len(attempts) == 1:
+                raise PermissionError("temporary Windows file lock")
+        return original_rename(path, target)
+
+    monkeypatch.setattr(Path, "rename", retry_once)
+    output = tmp_path / "output"
+    assert run(Namespace(input_dir=source, output_dir=output, pages=None, overrides=overrides)) == 0
+    assert len(attempts) == 2
+    assert (output / "pages/scan/normalized.png").exists()

@@ -172,16 +172,33 @@ numbered page previews, contact sheets, and an index for visual review. Source
 pixels inside each polygon retain their original resolution; the surrounding
 area is filled with white.
 
+The command accepts PNG, JPEG, TIFF, BMP, WebP, and JPEG 2000 files, including
+uppercase extensions. It expands multi-page scans in frame order, converts
+non-PNG pages automatically, and saves `normalized.png` in each page's output
+folder. Existing ordinary PNG inputs are reused directly. Original file paths,
+file hashes, frame numbers, and normalization details are recorded in `page.json`
+and the line index. Same-name scans with different extensions receive distinct
+page IDs.
+
+EXIF orientation is applied before segmentation, and transparent areas are
+composited on white. The segmentation image uses 8-bit RGB. For 16-bit grayscale
+scans, values are scaled across the full 0–65535 range, with the conversion
+recorded. Coordinates refer to the normalized PNG.
+
 For locally acquired EAP272/1/2/11 scans named
 `EAP272-1-2-11_0001.png` through `EAP272-1-2-11_0129.png`, run:
 
 ```bash
-python src/manuscripts/segment_lines.py --input-dir outputs/manuscript_downloads/EAP272-1-2-11/images --output-dir outputs/manuscript_segmentation/EAP272-1-2-11/segmentation_v2 --overrides configs/manuscripts/eap272_1_2_11.json
+python src/manuscripts/segment_lines.py --input-dir outputs/manuscript_downloads/EAP272-1-2-11/images --output-dir outputs/manuscript_segmentation/EAP272-1-2-11/segmentation_v3 --overrides configs/manuscripts/eap272_1_2_11.json
 ```
 
 Use `--pages 2-5,20,129` for a smaller selection in its own output directory.
+Unique numeric filename suffixes supply page numbers. For other filename
+patterns or conflicting suffixes, selection uses 1-based positions in the
+expanded list, sorted by natural filename order and then by frame number.
 Repeating a run verifies the source and output hashes before reusing completed
-pages. Use a new output directory when changing the source selection or settings.
+pages. Use a new output directory when changing the source selection, settings,
+or segmentation code version.
 
 All crops await visual review. Flags identify potential ink intersections and
 irregular spacing. The collection configuration leaves the handwritten cover
