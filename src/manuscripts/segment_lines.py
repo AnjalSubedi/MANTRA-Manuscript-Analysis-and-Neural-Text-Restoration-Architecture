@@ -67,7 +67,7 @@ def discover_pages(source):
     return identified
 
 
-def normalize_scan(scan, destination):
+def normalize_scan(scan, destination, rotation=0):
     """Convert one source frame to RGB and save a PNG when normalization is needed."""
     with Image.open(scan.source) as opened:
         opened.seek(scan.frame_index)
@@ -76,6 +76,7 @@ def normalize_scan(scan, destination):
         source_size = list(opened.size)
         orientation = int(opened.getexif().get(274, 1))
         image = ImageOps.exif_transpose(opened)
+        oriented_size = image.size
         conversion = []
         if orientation != 1:
             conversion.append(f"EXIF orientation {orientation} applied")
@@ -90,10 +91,17 @@ def normalize_scan(scan, destination):
             image = Image.alpha_composite(background, image.convert("RGBA"))
             conversion.append("Transparency composited on white")
         image = image.convert("RGB")
+        if rotation:
+            transpose = {90: Image.Transpose.ROTATE_270, 180: Image.Transpose.ROTATE_180,
+                         270: Image.Transpose.ROTATE_90}
+            if rotation not in transpose:
+                raise ValueError("rotation_degrees must be 0, 90, 180 or 270 clockwise")
+            image = image.transpose(transpose[rotation])
+            conversion.append(f"Rotated {rotation} degrees clockwise")
         if source_mode != "RGB":
             conversion.append(f"Source mode {source_mode} converted to RGB")
         normalized_png = str(scan.source.resolve())
-        if source_format != "PNG" or scan.frame_count != 1 or orientation != 1 or source_mode not in {"RGB", "L", "1"}:
+        if source_format != "PNG" or scan.frame_count != 1 or orientation != 1 or rotation or source_mode not in {"RGB", "L", "1"}:
             normalized_png = "normalized.png"
             image.save(destination / normalized_png, format="PNG")
     return image, {
@@ -101,7 +109,27 @@ def normalize_scan(scan, destination):
         "source_size": source_size, "source_frame_index": scan.frame_index,
         "source_frame_count": scan.frame_count, "normalized_png": normalized_png,
         "normalized_size": list(image.size), "normalization": conversion,
+        **({"rotation_degrees": rotation, "exif_orientation": orientation,
+            "exif_oriented_size": list(oriented_size)} if rotation else {}),
     }
+
+
+def source_point(x, y, normalization):
+    """Map normalized image-edge coordinates back to the encoded source raster."""
+    width, height = normalization["exif_oriented_size"]
+    rotation = normalization["rotation_degrees"]
+    if rotation == 90:
+        x, y = y, height - x
+    elif rotation == 180:
+        x, y = width - x, height - y
+    elif rotation == 270:
+        x, y = width - y, x
+    width, height = normalization["source_size"]
+    orientation = normalization["exif_orientation"]
+    return {
+        2: (width - x, y), 3: (width - x, height - y), 4: (x, height - y),
+        5: (y, x), 6: (y, height - x), 7: (width - y, height - x), 8: (width - y, x),
+    }.get(orientation, (x, y))
 
 
 def digest(path):
@@ -149,7 +177,7 @@ def largest_band(active, close_size, horizontal=False):
     return start, start + int(component[length])
 
 
-def paper_text_region(gray):
+def paper_text_region(gray, inset=(0.09, 0.09, 0.09, 0.10)):
     """Locate the largest bright folio on a dark scan bed and inset its margins."""
     _, paper = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     paper = cv2.morphologyEx(paper, cv2.MORPH_CLOSE, np.ones((17, 17), np.uint8))
@@ -159,8 +187,11 @@ def paper_text_region(gray):
     x, y, width, height, area = map(int, max(components[1:], key=lambda row: row[4]))
     if area < gray.size * 0.15:
         raise ValueError("Folio detection is uncertain; set roi_fraction")
-    return (x + round(width * 0.09), y + round(height * 0.09),
-            x + width - round(width * 0.09), y + height - round(height * 0.10))
+    left, top, right, bottom = inset
+    if not all(0 <= value < 0.5 for value in inset):
+        raise ValueError("folio_inset_fraction values must be between zero and 0.5")
+    return (x + round(width * left), y + round(height * top),
+            x + width - round(width * right), y + height - round(height * bottom))
 
 
 def folio_detection_gray(gray, region):
@@ -241,7 +272,9 @@ def detect_layout(image, override):
             round(fraction[2] * analysis_width), round(fraction[3] * analysis_height),
         )
     elif folio_mode:
-        left, top, right, bottom = paper_text_region(gray)
+        left, top, right, bottom = paper_text_region(
+            gray, override.get("folio_inset_fraction", (0.09, 0.09, 0.09, 0.10))
+        )
     else:
         left, right = int(analysis_width * 0.09), int(analysis_width * 0.93)
         top, bottom = int(analysis_height * 0.10), int(analysis_height * 0.89)
@@ -352,7 +385,7 @@ def crop_polygon(image, left, right, top, bottom):
 
 def export_page(path, destination, override, binding, scan=None, source_checksum=None):
     scan = scan or ScanPage(path, 0, 1, path.stem)
-    image, normalization = normalize_scan(scan, destination)
+    image, normalization = normalize_scan(scan, destination, override.get("rotation_degrees", 0))
     record = {
         "source_file": str(path.resolve()), "source_sha256": source_checksum or digest(path),
         **normalization, "page_id": scan.stem, "binding": binding,
@@ -360,19 +393,43 @@ def export_page(path, destination, override, binding, scan=None, source_checksum
         "scope": "Main text block; marginal notes and folio numbers need separate review",
         "coordinate_system": "Normalized PNG pixels, top-left origin, exclusive right/bottom bbox",
     }
+    if "rotation_degrees" in normalization:
+        record["source_coordinate_system"] = "Encoded source raster, top-left origin, image-edge coordinates"
     overview = image.copy()
     draw = ImageDraw.Draw(overview)
+    reason = None
     if override.get("action") == "review_only":
-        record["flags"] = [override.get("reason", "Manual layout decision required")]
-        record["status"] = "review_only"
+        reason = override.get("reason", "Manual layout decision required")
     else:
         layout = detect_layout(image, override)
         record["layout"] = layout
+        if "expected_line_count" in override:
+            minimum, maximum = override["expected_line_count"]
+            if not 1 <= minimum <= maximum:
+                raise ValueError("expected_line_count must be a positive minimum and maximum")
+            count = len(layout["headlines"])
+            if not minimum <= count <= maximum:
+                reason = f"Detected {count} lines outside expected range {minimum}–{maximum}"
+    if reason is not None:
+        record["flags"] = [reason]
+        record["status"] = "review_only"
+    else:
         left, top, right, bottom = layout["roi"]
         headlines = layout["headlines"]
         gray = detection_gray(image)
-        if "detection_region" in layout:
-            gray = folio_detection_gray(gray, layout["detection_region"])
+        detection_region = layout.get("detection_region")
+        if detection_region:
+            gray = folio_detection_gray(gray, detection_region)
+        if override.get("check_outer_edges"):
+            region = detection_region or layout["roi"]
+            rleft, rtop, rright, rbottom = region
+            contrast = gray if detection_region else folio_detection_gray(gray, region)
+            ink = contrast[rtop:rbottom, rleft:rright] < 243
+            edges = {"left": ink[:, :3], "top": ink[:3, :],
+                     "right": ink[:, -3:], "bottom": ink[-3:, :]}
+            for name, edge in edges.items():
+                if edge.mean() > 0.025:
+                    record["flags"].append(f"Detected ink near the {name} edge of the text region")
         boundaries = [np.full(right - left, top, dtype=np.int32)]
         crossings = []
         for upper, lower in zip(headlines, headlines[1:]):
@@ -407,6 +464,18 @@ def export_page(path, destination, override, binding, scan=None, source_checksum
                 "boundary_ink_fraction_top_bottom": edge_hits,
                 "pixels": "Normalized RGB inside polygon; white outside; no spatial resampling",
             })
+            if "rotation_degrees" in normalization:
+                split = right - left
+                edge_polygon = (polygon[:split] + [(right, int(upper[-1])), (right, int(lower[-1]))]
+                                + polygon[split:])
+                source_polygon = [source_point(x, y, normalization) for x, y in edge_polygon]
+                x0, y0, x1, y1 = box
+                corners = [source_point(x, y, normalization) for x in (x0, x1) for y in (y0, y1)]
+                xs, ys = zip(*corners)
+                record["lines"][-1].update(
+                    source_polygon_xy=source_polygon,
+                    source_bbox_xyxy=[min(xs), min(ys), max(xs), max(ys)],
+                )
             draw.line([tuple(point) for point in polygon + [polygon[0]]], fill=(220, 35, 35), width=max(1, image.width // 800))
             draw.text((min(right + 4, image.width - 35), int(np.mean(upper))),
                       f"L{number:02d}", fill=(220, 35, 35), stroke_width=max(0, image.width // 2500))

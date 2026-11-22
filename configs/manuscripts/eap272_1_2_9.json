@@ -1,0 +1,23 @@
+{
+  "defaults": {
+    "dark_scan_bed": true,
+    "rotation_degrees": 90,
+    "folio_inset_fraction": [0.025, 0.025, 0.025, 0.025],
+    "expected_line_count": [7, 15],
+    "check_outer_edges": true
+  },
+  "satyanarayana_EAP272_1_2_9_000": {
+    "action": "review_only",
+    "reason": "Handwritten cover has a different layout"
+  },
+  "satyanarayana_EAP272_1_2_9_001": {
+    "roi_fraction": [0.10, 0.38, 0.97, 0.98]
+  },
+  "satyanarayana_EAP272_1_2_9_050": {
+    "rotation_degrees": 270
+  },
+  "satyanarayana_EAP272_1_2_9_053": {
+    "action": "review_only",
+    "reason": "Irregular line spacing produces unreliable cuts"
+  }
+}

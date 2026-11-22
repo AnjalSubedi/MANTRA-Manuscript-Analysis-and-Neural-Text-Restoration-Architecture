@@ -10,10 +10,40 @@ from PIL import Image
 import pytest
 
 from manuscripts.segment_lines import (
-    crop_polygon, detection_gray, discover_pages, folio_detection_gray,
+    crop_polygon, detection_gray, discover_pages, export_page, folio_detection_gray,
     gap_path, get_override_for_path, largest_band, line_headlines, normalize_scan,
-    paper_text_region, run, select_pages,
+    paper_text_region, run, select_pages, source_point,
 )
+
+
+def test_rotation_maps_crop_back_to_original_raster(tmp_path):
+    path = tmp_path / "scan.png"
+    Image.new("RGB", (100, 160), "white").save(path)
+    output = tmp_path / "page"
+    output.mkdir()
+    record = export_page(path, output, {
+        "rotation_degrees": 90, "roi_fraction": [0.1, 0.1, 0.9, 0.9],
+        "headlines_fraction": [0.3],
+    }, {})
+    assert record["normalized_size"] == [160, 100]
+    assert source_point(0, 0, record) == (0, 160)
+    line = record["lines"][0]
+    x0, y0, x1, y1 = line["bbox_xyxy"]
+    assert line["source_bbox_xyxy"] == [y0, 160 - x1, y1, 160 - x0]
+
+
+def test_unexpected_line_count_goes_to_review(tmp_path):
+    path = tmp_path / "scan.png"
+    Image.new("RGB", (160, 100), "white").save(path)
+    output = tmp_path / "page"
+    output.mkdir()
+    record = export_page(path, output, {
+        "roi_fraction": [0.1, 0.1, 0.9, 0.9], "headlines_fraction": [0.3],
+        "expected_line_count": [7, 15],
+    }, {})
+    assert record["status"] == "review_only"
+    assert not record["lines"]
+    assert "Detected 1 lines" in record["flags"][0]
 
 
 def test_dark_scan_bed_is_excluded_and_rules_are_masked_for_detection():
