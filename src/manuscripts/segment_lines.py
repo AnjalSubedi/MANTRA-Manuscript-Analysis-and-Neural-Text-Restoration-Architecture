@@ -149,6 +149,39 @@ def largest_band(active, close_size, horizontal=False):
     return start, start + int(component[length])
 
 
+def paper_text_region(gray):
+    """Locate the largest bright folio on a dark scan bed and inset its margins."""
+    _, paper = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    paper = cv2.morphologyEx(paper, cv2.MORPH_CLOSE, np.ones((17, 17), np.uint8))
+    _, _, components, _ = cv2.connectedComponentsWithStats(paper, 8)
+    if len(components) < 2:
+        raise ValueError("No folio detected; set roi_fraction")
+    x, y, width, height, area = map(int, max(components[1:], key=lambda row: row[4]))
+    if area < gray.size * 0.15:
+        raise ValueError("Folio detection is uncertain; set roi_fraction")
+    return (x + round(width * 0.09), y + round(height * 0.09),
+            x + width - round(width * 0.09), y + height - round(height * 0.10))
+
+
+def folio_detection_gray(gray, region):
+    """Enhance local ink contrast and mask long straight rules for detection."""
+    left, top, right, bottom = region
+    patch = gray[top:bottom, left:right]
+    background = cv2.GaussianBlur(patch, (0, 0), sigmaX=max(3, patch.shape[1] * 0.025))
+    contrast = 255 - cv2.subtract(background, patch)
+    ink = (contrast < 243).astype(np.uint8)
+    height, width = ink.shape
+    horizontal = cv2.morphologyEx(ink, cv2.MORPH_CLOSE, np.ones((1, 5), np.uint8))
+    horizontal = cv2.morphologyEx(horizontal, cv2.MORPH_OPEN, np.ones((1, max(1, round(width * 0.60))), np.uint8))
+    vertical = cv2.morphologyEx(ink, cv2.MORPH_CLOSE, np.ones((5, 1), np.uint8))
+    vertical = cv2.morphologyEx(vertical, cv2.MORPH_OPEN, np.ones((max(1, round(height * 0.55)), 1), np.uint8))
+    rules = cv2.dilate(horizontal | vertical, np.ones((3, 3), np.uint8))
+    contrast[rules != 0] = 255
+    result = np.full_like(gray, 255)
+    result[top:bottom, left:right] = contrast
+    return result
+
+
 def line_headlines(profile, page_width):
     """Estimate line pitch, then suppress secondary peaks within each line."""
     smooth = np.convolve(profile, [0.2, 0.6, 0.2], mode="same")
@@ -192,6 +225,7 @@ def detect_layout(image, override):
     analysis_height = round(height * scale)
     small = image.resize((analysis_width, analysis_height), Image.Resampling.LANCZOS)
     gray = detection_gray(small)
+    folio_mode = override.get("dark_scan_bed", False)
     threshold, _ = cv2.threshold(
         gray[int(analysis_height * 0.18):int(analysis_height * 0.8),
              int(analysis_width * 0.2):int(analysis_width * 0.85)],
@@ -206,6 +240,8 @@ def detect_layout(image, override):
             round(fraction[0] * analysis_width), round(fraction[1] * analysis_height),
             round(fraction[2] * analysis_width), round(fraction[3] * analysis_height),
         )
+    elif folio_mode:
+        left, top, right, bottom = paper_text_region(gray)
     else:
         left, right = int(analysis_width * 0.09), int(analysis_width * 0.93)
         top, bottom = int(analysis_height * 0.10), int(analysis_height * 0.89)
@@ -219,6 +255,10 @@ def detect_layout(image, override):
         left, right = left + band_left, left + band_right
     if not (0 <= left < right <= analysis_width and 0 <= top < bottom <= analysis_height):
         raise ValueError("Text region must have positive area within the image")
+    detection_region = (left, top, right, bottom)
+    if folio_mode:
+        threshold = 243
+        mask = (folio_detection_gray(gray, detection_region) < threshold).astype(np.uint8)
     if "headlines_fraction" in override:
         headlines = [round(value * analysis_height) for value in override["headlines_fraction"]]
         if not headlines or any(not top <= value < bottom for value in headlines):
@@ -246,17 +286,21 @@ def detect_layout(image, override):
         "headlines": [round(value * height / analysis_height) for value in headlines],
         "pitch": pitch * height / analysis_height,
         "ink_threshold": float(threshold),
+        **({"detection_region": [
+            round(value * ratio)
+            for value, ratio in zip(detection_region, (width / analysis_width, height / analysis_height) * 2)
+        ]} if folio_mode else {}),
     }
 
 
-def gap_path(gray, left, right, upper_headline, lower_headline, ink_threshold):
+def gap_path(gray, left, right, upper_headline, lower_headline, ink_threshold, *, symmetric=False):
     """Find a low-ink path between neighbouring lines in native coordinates."""
     pitch = lower_headline - upper_headline
     if pitch < 4:
         raise ValueError("Line spacing is too small")
-    low = upper_headline + max(2, round(pitch * 0.42))
+    low = upper_headline + max(2, round(pitch * (0.12 if symmetric else 0.42)))
     high = lower_headline - 1
-    center = upper_headline + pitch * 0.83
+    center = upper_headline + pitch * (0.50 if symmetric else 0.83)
     patch = gray[low:high, left:right].astype(np.float32)
     if not patch.size:
         raise ValueError("Empty corridor between lines")
@@ -327,10 +371,13 @@ def export_page(path, destination, override, binding, scan=None, source_checksum
         left, top, right, bottom = layout["roi"]
         headlines = layout["headlines"]
         gray = detection_gray(image)
+        if "detection_region" in layout:
+            gray = folio_detection_gray(gray, layout["detection_region"])
         boundaries = [np.full(right - left, top, dtype=np.int32)]
         crossings = []
         for upper, lower in zip(headlines, headlines[1:]):
-            seam, fraction = gap_path(gray, left, right, upper, lower, layout["ink_threshold"])
+            seam, fraction = gap_path(gray, left, right, upper, lower, layout["ink_threshold"],
+                                      symmetric="detection_region" in layout)
             boundaries.append(seam)
             crossings.append(fraction)
         boundaries.append(np.full(right - left, bottom, dtype=np.int32))
@@ -393,23 +440,22 @@ def extract_page_num(path):
 
 
 def get_override_for_path(path, overrides):
-    if not overrides:
-        return {}
+    defaults = overrides.get("defaults", {})
     if path.stem in overrides:
-        return overrides[path.stem]
+        return {**defaults, **overrides[path.stem]}
     stem_hyphen = path.stem.replace("_", "-")
     for key, val in overrides.items():
         if key == stem_hyphen or key.replace("_", "-") == stem_hyphen:
-            return val
+            return {**defaults, **val}
     try:
         page_num = extract_page_num(path)
         for key, val in overrides.items():
             key_match = re.search(r'(\d+)$', key)
             if key_match and int(key_match.group(1)) == page_num:
-                return val
+                return {**defaults, **val}
     except ValueError:
         pass
-    return {}
+    return defaults
 
 
 def select_pages(paths, selection):

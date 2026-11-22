@@ -10,9 +10,32 @@ from PIL import Image
 import pytest
 
 from manuscripts.segment_lines import (
-    crop_polygon, detection_gray, discover_pages, gap_path, largest_band,
-    line_headlines, normalize_scan, run, select_pages,
+    crop_polygon, detection_gray, discover_pages, folio_detection_gray,
+    gap_path, get_override_for_path, largest_band, line_headlines, normalize_scan,
+    paper_text_region, run, select_pages,
 )
+
+
+def test_dark_scan_bed_is_excluded_and_rules_are_masked_for_detection():
+    gray = np.full((200, 180), 35, dtype=np.uint8)
+    gray[20:180, 30:150] = 200
+    gray[50, 46:134] = 60
+    gray[61:65, 65:77] = 60
+    region = paper_text_region(gray)
+    assert region == (41, 34, 139, 164)
+    detection = folio_detection_gray(gray, region)
+    assert detection[0, 0] == 255
+    assert detection[50, 70] == 255
+    assert detection[62, 70] < 243
+    assert gray[50, 70] == 60
+
+
+def test_page_overrides_inherit_collection_defaults():
+    overrides = {"defaults": {"dark_scan_bed": True}, "scan_002": {"action": "review_only"}}
+    assert get_override_for_path(Path("scan_001.jpg"), overrides) == {"dark_scan_bed": True}
+    assert get_override_for_path(Path("scan_002.jpg"), overrides) == {
+        "dark_scan_bed": True, "action": "review_only",
+    }
 
 
 def test_gap_follows_space_between_descender_and_next_line_matra():

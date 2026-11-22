@@ -1,0 +1,15 @@
+{
+  "defaults": {
+    "dark_scan_bed": true
+  },
+  "Kutai_EAP272_1_2_41_001": {
+    "roi_fraction": [0.105, 0.212, 0.61, 0.807]
+  },
+  "Kutai_EAP272_1_2_41_003": {
+    "roi_fraction": [0.232, 0.211, 0.735, 0.776]
+  },
+  "Kutai_EAP272_1_2_41_236": {
+    "action": "review_only",
+    "reason": "Faded writing needs manually verified line boundaries"
+  }
+}
