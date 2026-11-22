@@ -10,6 +10,8 @@ build/
 dist/
 
 # Large dataset outputs
+data/raw_manuscripts/*/images/
+data/segmented_manuscripts/
 data/stage1_synthetic/images/
 data/stage1_synthetic/fonts/
 data/stage1_synthetic/text/raw/

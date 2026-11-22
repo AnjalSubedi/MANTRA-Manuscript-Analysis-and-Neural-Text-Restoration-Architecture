@@ -12,8 +12,10 @@ import json
 import math
 import os
 from pathlib import Path
+import re
 import shutil
 import tempfile
+import time
 
 import cv2
 import numpy as np
@@ -302,6 +304,36 @@ def export_page(path, destination, override, binding):
     return record
 
 
+def extract_page_num(path):
+    parts = path.stem.rsplit("_", 1)
+    if len(parts) > 1 and parts[1].isdigit():
+        return int(parts[1])
+    match = re.search(r'(\d+)$', path.stem)
+    if match:
+        return int(match.group(1))
+    raise ValueError(f"Cannot parse page number from scan filename: {path.name}")
+
+
+def get_override_for_path(path, overrides):
+    if not overrides:
+        return {}
+    if path.stem in overrides:
+        return overrides[path.stem]
+    stem_hyphen = path.stem.replace("_", "-")
+    for key, val in overrides.items():
+        if key == stem_hyphen or key.replace("_", "-") == stem_hyphen:
+            return val
+    try:
+        page_num = extract_page_num(path)
+        for key, val in overrides.items():
+            key_match = re.search(r'(\d+)$', key)
+            if key_match and int(key_match.group(1)) == page_num:
+                return val
+    except ValueError:
+        pass
+    return {}
+
+
 def select_pages(paths, selection):
     if not selection:
         return paths
@@ -317,7 +349,7 @@ def select_pages(paths, selection):
             numbers.update(range(start, stop + 1))
         else:
             raise ValueError("Invalid page selection")
-    available = {int(path.stem.rsplit("_", 1)[1]): path for path in paths}
+    available = {extract_page_num(path): path for path in paths}
     missing = numbers - available.keys()
     if missing:
         raise ValueError(f"Requested scan numbers absent: {sorted(missing)}")
@@ -329,9 +361,11 @@ def run(args):
     output = args.output_dir.resolve()
     if source == output or source in output.parents:
         raise ValueError("Output must be outside the source image directory")
-    paths = select_pages(sorted(source.glob("*.png")), args.pages)
+    image_extensions = {".png", ".jpg", ".jpeg", ".tif", ".tiff"}
+    all_scans = sorted([p for p in source.iterdir() if p.is_file() and p.suffix.lower() in image_extensions])
+    paths = select_pages(all_scans, args.pages)
     if not paths:
-        raise ValueError("No PNG scans found")
+        raise ValueError(f"No scan images found in {source}")
     overrides = json.loads(args.overrides.read_text(encoding="utf-8")) if args.overrides else {}
     binding = {"version": VERSION, "implementation_sha256": digest(Path(__file__)), "overrides": overrides}
     output.mkdir(parents=True, exist_ok=True)
@@ -361,8 +395,16 @@ def run(args):
                         raise ValueError("Existing crop or preview changed; choose a new output directory")
                 else:
                     temporary = Path(tempfile.mkdtemp(prefix=f".{path.stem}_", dir=pages_dir))
-                    record = export_page(path, temporary, overrides.get(path.stem, {}), binding)
-                    temporary.rename(destination)
+                    override = get_override_for_path(path, overrides)
+                    record = export_page(path, temporary, override, binding)
+                    for attempt in range(5):
+                        try:
+                            temporary.rename(destination)
+                            break
+                        except (PermissionError, OSError):
+                            if attempt == 4:
+                                shutil.move(str(temporary), str(destination))
+                            time.sleep(0.1)
                     temporary = None
                 records.append(record)
                 print(f"[{position}/{len(paths)}] {path.stem}: {len(record['lines'])} draft lines, {len(record['flags'])} flags", flush=True)
