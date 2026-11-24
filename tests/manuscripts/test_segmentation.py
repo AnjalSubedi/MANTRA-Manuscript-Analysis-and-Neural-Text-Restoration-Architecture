@@ -316,3 +316,47 @@ def test_converted_page_publication_retries_a_transient_windows_lock(tmp_path, m
     assert run(Namespace(input_dir=source, output_dir=output, pages=None, overrides=overrides)) == 0
     assert len(attempts) == 2
     assert (output / "pages/scan/normalized.png").exists()
+
+
+def test_line_headlines_handles_negative_correlation_peaks_without_stop_iteration():
+    # Profile with low periodic contrast where correlation peaks are <= 0
+    profile = np.array([10, 10, 11, 10, 10, 11, 10, 10, 11, 10, 10, 10] * 5, dtype=float)
+    positions, pitch = line_headlines(profile, 1000)
+    assert positions
+    assert pitch is not None
+
+
+def test_uncertain_layout_page_falls_back_to_review_only(tmp_path):
+    path = tmp_path / "blank_cover.png"
+    # Uniform dark wooden cover
+    Image.new("RGB", (120, 80), (30, 30, 30)).save(path)
+    output = tmp_path / "page"
+    output.mkdir()
+    record = export_page(path, output, {}, {})
+    assert record["status"] == "review_only"
+    assert "Layout detection uncertain" in record["flags"][0]
+
+
+def test_two_leaf_manuscript_segments_both_leaves(tmp_path):
+    path = tmp_path / "two_leaves.png"
+    pixels = np.full((400, 600, 3), 25, dtype=np.uint8)
+    # Top leaf (paper at 200, ink lines at 60)
+    pixels[30:170, 80:520] = 200
+    for y in [55, 77, 99, 121, 143]:
+        for x in range(100, 500, 25):
+            pixels[y:y+4, x:x+18] = 60
+    # Bottom leaf
+    pixels[230:370, 80:520] = 200
+    for y in [255, 277, 299, 321, 343]:
+        for x in range(100, 500, 25):
+            pixels[y:y+4, x:x+18] = 60
+    Image.fromarray(pixels).save(path)
+    output = tmp_path / "page"
+    output.mkdir()
+    record = export_page(path, output, {}, {})
+    assert record["status"] == "draft_segmented"
+    assert len(record["lines"]) == 10
+    assert [line["line_id"] for line in record["lines"]] == [
+        f"two_leaves_line{i:02d}" for i in range(1, 11)
+    ]
+

@@ -10,8 +10,11 @@ build/
 dist/
 
 # Large dataset outputs
-data/raw_manuscripts/*/images/
+data/raw_manuscripts/
 data/segmented_manuscripts/
+data/processed/
+processed/
+src/download_eap_manuscript.py
 data/stage1_synthetic/images/
 data/stage1_synthetic/fonts/
 data/stage1_synthetic/text/raw/
@@ -34,8 +37,12 @@ checkpoints/
 *.ckpt
 *.onnx
 
+# Scratch files
+scratch/
+
 # OS/editor
 .DS_Store
+
 Thumbs.db
 .vscode/
 .idea/

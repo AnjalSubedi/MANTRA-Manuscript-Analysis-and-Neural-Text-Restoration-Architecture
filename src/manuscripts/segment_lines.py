@@ -232,8 +232,12 @@ def line_headlines(profile, page_width):
     ]
     if not peaks:
         raise ValueError("Could not estimate line spacing; set explicit headlines")
-    strongest = max(correlation[index] for index in peaks)
-    pitch = next(index for index in peaks if correlation[index] >= 0.62 * strongest)
+    pos_peaks = [index for index in peaks if correlation[index] > 0]
+    if pos_peaks:
+        strongest = max(correlation[index] for index in pos_peaks)
+        pitch = next((index for index in pos_peaks if correlation[index] >= 0.62 * strongest), pos_peaks[0])
+    else:
+        pitch = max(peaks, key=lambda index: correlation[index])
     candidates = [
         index for index in range(1, len(smooth) - 1)
         if smooth[index] >= smooth[index - 1]
@@ -256,13 +260,27 @@ def detect_layout(image, override):
     analysis_height = round(height * scale)
     small = image.resize((analysis_width, analysis_height), Image.Resampling.LANCZOS)
     gray = detection_gray(small)
-    folio_mode = override.get("dark_scan_bed", False)
+    
+    if "dark_scan_bed" in override:
+        folio_mode = override["dark_scan_bed"]
+    else:
+        h_border = max(1, int(analysis_height * 0.04))
+        w_border = max(1, int(analysis_width * 0.04))
+        border_pixels = np.concatenate([
+            gray[:h_border, :].ravel(),
+            gray[-h_border:, :].ravel(),
+            gray[:, :w_border].ravel(),
+            gray[:, -w_border:].ravel(),
+        ])
+        folio_mode = bool(np.median(border_pixels) < 55)
+
     threshold, _ = cv2.threshold(
         gray[int(analysis_height * 0.18):int(analysis_height * 0.8),
              int(analysis_width * 0.2):int(analysis_width * 0.85)],
         0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU,
     )
     mask = (gray < threshold).astype(np.uint8)
+    
     if "roi_fraction" in override:
         fraction = override["roi_fraction"]
         if len(fraction) != 4 or not all(0 <= value <= 1 for value in fraction):
@@ -271,10 +289,33 @@ def detect_layout(image, override):
             round(fraction[0] * analysis_width), round(fraction[1] * analysis_height),
             round(fraction[2] * analysis_width), round(fraction[3] * analysis_height),
         )
+        leaf_regions = [(left, top, right, bottom)]
+        use_folio_detection = folio_mode
     elif folio_mode:
-        left, top, right, bottom = paper_text_region(
-            gray, override.get("folio_inset_fraction", (0.09, 0.09, 0.09, 0.10))
-        )
+        _, paper = cv2.threshold(gray, 60, 255, cv2.THRESH_BINARY)
+        paper = cv2.morphologyEx(paper, cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8))
+        num, labels, stats, _ = cv2.connectedComponentsWithStats(paper, 8)
+        raw_leaves = []
+        for i in range(1, num):
+            x, y, cw, ch, area = stats[i]
+            if (area > analysis_height * analysis_width * 0.07
+                    and cw > analysis_width * 0.25
+                    and ch > analysis_height * 0.12
+                    and x < analysis_width * 0.8):
+                raw_leaves.append((x, y, cw, ch, area))
+        if not raw_leaves:
+            region = paper_text_region(gray, override.get("folio_inset_fraction", (0.09, 0.09, 0.09, 0.10)))
+            leaf_regions = [region]
+        else:
+            raw_leaves.sort(key=lambda item: item[1])
+            inset = override.get("folio_inset_fraction", (0.08, 0.08, 0.08, 0.08))
+            ileft, itop, iright, ibottom = inset
+            leaf_regions = [
+                (x + round(cw * ileft), y + round(ch * itop),
+                 x + cw - round(cw * iright), y + ch - round(ch * ibottom))
+                for x, y, cw, ch, _ in raw_leaves
+            ]
+        use_folio_detection = True
     else:
         left, right = int(analysis_width * 0.09), int(analysis_width * 0.93)
         top, bottom = int(analysis_height * 0.10), int(analysis_height * 0.89)
@@ -286,43 +327,91 @@ def detect_layout(image, override):
         active = columns > max(0.025, float(np.percentile(columns, 85)) * 0.16)
         band_left, band_right = largest_band(active, 7, horizontal=True)
         left, right = left + band_left, left + band_right
-    if not (0 <= left < right <= analysis_width and 0 <= top < bottom <= analysis_height):
-        raise ValueError("Text region must have positive area within the image")
-    detection_region = (left, top, right, bottom)
-    if folio_mode:
-        threshold = 243
-        mask = (folio_detection_gray(gray, detection_region) < threshold).astype(np.uint8)
-    if "headlines_fraction" in override:
-        headlines = [round(value * analysis_height) for value in override["headlines_fraction"]]
-        if not headlines or any(not top <= value < bottom for value in headlines):
-            raise ValueError("Explicit headlines must fall within the text region")
-        if headlines != sorted(set(headlines)):
-            raise ValueError("Explicit headlines must be increasing and distinct")
-        pitch = float(np.median(np.diff(headlines))) if len(headlines) > 1 else bottom - top
-    else:
-        projection_top = max(0, top - 8)
-        projection_bottom = min(analysis_height, bottom + 8)
-        profile = mask[projection_top:projection_bottom, left:right].mean(axis=1)
-        positions, pitch = line_headlines(profile, analysis_width)
-        headlines = [projection_top + position for position in positions]
-        pitch = pitch or bottom - top
-    padding = max(5, round(pitch * 0.22))
-    left = max(0, left - padding)
-    right = min(analysis_width, right + padding)
-    top = max(0, min(top, headlines[0]) - round(pitch * 0.65))
-    bottom = min(analysis_height, max(bottom, headlines[-1]) + round(pitch * 0.45))
+        leaf_regions = [(left, top, right, bottom)]
+        use_folio_detection = False
+
+    blocks = []
+    for b_left, b_top, b_right, b_bottom in leaf_regions:
+        if not (0 <= b_left < b_right <= analysis_width and 0 <= b_top < b_bottom <= analysis_height):
+            continue
+        detection_region = (b_left, b_top, b_right, b_bottom)
+        if use_folio_detection:
+            b_contrast = folio_detection_gray(gray, detection_region)
+            b_threshold = 243.0
+            b_mask = (b_contrast < b_threshold).astype(np.uint8)
+        else:
+            b_threshold = float(threshold)
+            b_mask = mask
+        
+        if "headlines_fraction" in override and len(leaf_regions) == 1:
+            headlines = [round(value * analysis_height) for value in override["headlines_fraction"]]
+            if not headlines or any(not b_top <= value < b_bottom for value in headlines):
+                raise ValueError("Explicit headlines must fall within the text region")
+            if headlines != sorted(set(headlines)):
+                raise ValueError("Explicit headlines must be increasing and distinct")
+            pitch = float(np.median(np.diff(headlines))) if len(headlines) > 1 else b_bottom - b_top
+        else:
+            proj_top = max(0, b_top - 6)
+            proj_bottom = min(analysis_height, b_bottom + 6)
+            profile = b_mask[proj_top:proj_bottom, b_left:b_right].mean(axis=1)
+            try:
+                positions, pitch = line_headlines(profile, analysis_width)
+                headlines = [proj_top + position for position in positions]
+                pitch = pitch or b_bottom - b_top
+            except ValueError:
+                continue
+        
+        if not headlines:
+            continue
+        
+        padding = max(5, round(pitch * 0.22))
+        pad_left = max(0, b_left - padding)
+        pad_right = min(analysis_width, b_right + padding)
+        pad_top = max(0, min(b_top, headlines[0]) - round(pitch * 0.65))
+        pad_bottom = min(analysis_height, max(b_bottom, headlines[-1]) + round(pitch * 0.45))
+        
+        native_roi = [
+            math.floor(pad_left * width / analysis_width),
+            math.floor(pad_top * height / analysis_height),
+            math.ceil(pad_right * width / analysis_width),
+            math.ceil(pad_bottom * height / analysis_height),
+        ]
+        native_headlines = [round(value * height / analysis_height) for value in headlines]
+        native_pitch = pitch * height / analysis_height
+        
+        blocks.append({
+            "roi": native_roi,
+            "headlines": native_headlines,
+            "pitch": native_pitch,
+            "ink_threshold": float(b_threshold),
+            **({"detection_region": [
+                round(value * (width / analysis_width if i % 2 == 0 else height / analysis_height))
+                for i, value in enumerate(detection_region)
+            ]} if use_folio_detection else {}),
+        })
+
+    if not blocks:
+        raise ValueError("No usable text blocks detected")
+    
+    primary = blocks[0]
+    if len(blocks) == 1:
+        return {**primary, "blocks": blocks}
+    
+    overall_roi = [
+        min(b["roi"][0] for b in blocks),
+        min(b["roi"][1] for b in blocks),
+        max(b["roi"][2] for b in blocks),
+        max(b["roi"][3] for b in blocks),
+    ]
+    all_headlines = [h for b in blocks for h in b["headlines"]]
+    median_pitch = float(np.median([b["pitch"] for b in blocks]))
     return {
-        "roi": [math.floor(left * width / analysis_width),
-                math.floor(top * height / analysis_height),
-                math.ceil(right * width / analysis_width),
-                math.ceil(bottom * height / analysis_height)],
-        "headlines": [round(value * height / analysis_height) for value in headlines],
-        "pitch": pitch * height / analysis_height,
-        "ink_threshold": float(threshold),
-        **({"detection_region": [
-            round(value * ratio)
-            for value, ratio in zip(detection_region, (width / analysis_width, height / analysis_height) * 2)
-        ]} if folio_mode else {}),
+        "roi": overall_roi,
+        "headlines": all_headlines,
+        "pitch": median_pitch,
+        "ink_threshold": primary["ink_threshold"],
+        "blocks": blocks,
+        **({"detection_region": primary["detection_region"]} if "detection_region" in primary else {}),
     }
 
 
@@ -401,95 +490,117 @@ def export_page(path, destination, override, binding, scan=None, source_checksum
     if override.get("action") == "review_only":
         reason = override.get("reason", "Manual layout decision required")
     else:
-        layout = detect_layout(image, override)
-        record["layout"] = layout
-        if "expected_line_count" in override:
-            minimum, maximum = override["expected_line_count"]
-            if not 1 <= minimum <= maximum:
-                raise ValueError("expected_line_count must be a positive minimum and maximum")
-            count = len(layout["headlines"])
-            if not minimum <= count <= maximum:
-                reason = f"Detected {count} lines outside expected range {minimum}–{maximum}"
+        try:
+            layout = detect_layout(image, override)
+            record["layout"] = layout
+            if "expected_line_count" in override:
+                minimum, maximum = override["expected_line_count"]
+                if not 1 <= minimum <= maximum:
+                    raise ValueError("expected_line_count must be a positive minimum and maximum")
+                count = len(layout["headlines"])
+                if not minimum <= count <= maximum:
+                    reason = f"Detected {count} lines outside expected range {minimum}–{maximum}"
+        except ValueError as error:
+            reason = f"Layout detection uncertain: {error}"
     if reason is not None:
         record["flags"] = [reason]
         record["status"] = "review_only"
     else:
-        left, top, right, bottom = layout["roi"]
-        headlines = layout["headlines"]
         gray = detection_gray(image)
-        detection_region = layout.get("detection_region")
-        if detection_region:
-            gray = folio_detection_gray(gray, detection_region)
-        if override.get("check_outer_edges"):
-            region = detection_region or layout["roi"]
-            rleft, rtop, rright, rbottom = region
-            contrast = gray if detection_region else folio_detection_gray(gray, region)
-            ink = contrast[rtop:rbottom, rleft:rright] < 243
-            edges = {"left": ink[:, :3], "top": ink[:3, :],
-                     "right": ink[:, -3:], "bottom": ink[-3:, :]}
-            for name, edge in edges.items():
-                if edge.mean() > 0.025:
-                    record["flags"].append(f"Detected ink near the {name} edge of the text region")
-        boundaries = [np.full(right - left, top, dtype=np.int32)]
-        crossings = []
-        for upper, lower in zip(headlines, headlines[1:]):
-            seam, fraction = gap_path(gray, left, right, upper, lower, layout["ink_threshold"],
-                                      symmetric="detection_region" in layout)
-            boundaries.append(seam)
-            crossings.append(fraction)
-        boundaries.append(np.full(right - left, bottom, dtype=np.int32))
-        if len(headlines) > 2:
-            spacing = np.diff(headlines)
-            median = float(np.median(spacing))
-            if spacing.min() < median * 0.65 or spacing.max() > median * 1.4:
-                record["flags"].append("Irregular spacing: inspect for a missed or extra line")
+        blocks = layout.get("blocks", [layout])
         lines_dir = destination / "lines"
-        lines_dir.mkdir()
+        lines_dir.mkdir(exist_ok=True)
         thumbnails = []
-        for number, (upper, lower) in enumerate(zip(boundaries, boundaries[1:]), start=1):
-            crop, box, polygon = crop_polygon(image, left, right, upper, lower)
-            filename = f"{scan.stem}_line{number:02d}.png"
-            crop.save(lines_dir / filename)
-            line_flags = []
-            edge_hits = [0.0 if number == 1 else crossings[number - 2],
-                         0.0 if number == len(headlines) else crossings[number - 1]]
-            if max(edge_hits) > 0:
-                line_flags.append("Boundary crosses detected ink; inspect touching characters")
-            if max(edge_hits) > 0.003:
-                record["flags"].append(f"Line {number}: boundary crosses detected ink")
-            record["lines"].append({
-                "line_id": filename[:-4], "file": "lines/" + filename,
-                "sha256": digest(lines_dir / filename), "bbox_xyxy": box,
-                "polygon_xy": polygon, "review_status": "pending", "flags": line_flags,
-                "boundary_ink_fraction_top_bottom": edge_hits,
-                "pixels": "Normalized RGB inside polygon; white outside; no spatial resampling",
-            })
-            if "rotation_degrees" in normalization:
-                split = right - left
-                edge_polygon = (polygon[:split] + [(right, int(upper[-1])), (right, int(lower[-1]))]
-                                + polygon[split:])
-                source_polygon = [source_point(x, y, normalization) for x, y in edge_polygon]
-                x0, y0, x1, y1 = box
-                corners = [source_point(x, y, normalization) for x in (x0, x1) for y in (y0, y1)]
-                xs, ys = zip(*corners)
-                record["lines"][-1].update(
-                    source_polygon_xy=source_polygon,
-                    source_bbox_xyxy=[min(xs), min(ys), max(xs), max(ys)],
+        line_number = 1
+        for block in blocks:
+            b_left, b_top, b_right, b_bottom = block["roi"]
+            b_headlines = block["headlines"]
+            b_ink_threshold = block["ink_threshold"]
+            b_detection_region = block.get("detection_region")
+            proc_gray = gray
+            if b_detection_region:
+                proc_gray = folio_detection_gray(gray, b_detection_region)
+            
+            if override.get("check_outer_edges"):
+                region = b_detection_region or block["roi"]
+                rleft, rtop, rright, rbottom = region
+                contrast = gray if b_detection_region else folio_detection_gray(gray, region)
+                ink = contrast[rtop:rbottom, rleft:rright] < 243
+                edges = {"left": ink[:, :3], "top": ink[:3, :],
+                         "right": ink[:, -3:], "bottom": ink[-3:, :]}
+                for name, edge in edges.items():
+                    if edge.mean() > 0.025:
+                        record["flags"].append(f"Detected ink near the {name} edge of the text region")
+            
+            boundaries = [np.full(b_right - b_left, b_top, dtype=np.int32)]
+            crossings = []
+            for upper, lower in zip(b_headlines, b_headlines[1:]):
+                seam, fraction = gap_path(
+                    proc_gray, b_left, b_right, upper, lower, b_ink_threshold,
+                    symmetric="detection_region" in block
                 )
-            draw.line([tuple(point) for point in polygon + [polygon[0]]], fill=(220, 35, 35), width=max(1, image.width // 800))
-            draw.text((min(right + 4, image.width - 35), int(np.mean(upper))),
-                      f"L{number:02d}", fill=(220, 35, 35), stroke_width=max(0, image.width // 2500))
-            crop.thumbnail((1400, 170), Image.Resampling.LANCZOS)
-            thumbnails.append((number, crop.copy()))
-        sheet = Image.new("RGB", (1460, sum(crop.height + 26 for _, crop in thumbnails)), "white")
-        sheet_draw = ImageDraw.Draw(sheet)
-        y = 0
-        for number, thumbnail in thumbnails:
-            sheet_draw.text((5, y + 4), f"L{number:02d}", fill="black")
-            sheet.paste(thumbnail, (50, y + 18))
-            y += thumbnail.height + 26
-        sheet.save(destination / "line_contact_sheet.jpg", quality=92)
-        record["status"] = "draft_segmented"
+                boundaries.append(seam)
+                crossings.append(fraction)
+            boundaries.append(np.full(b_right - b_left, b_bottom, dtype=np.int32))
+            
+            if len(b_headlines) > 2:
+                spacing = np.diff(b_headlines)
+                median = float(np.median(spacing))
+                if spacing.min() < median * 0.65 or spacing.max() > median * 1.4:
+                    record["flags"].append("Irregular spacing: inspect for a missed or extra line")
+            
+            for index, (upper, lower) in enumerate(zip(boundaries, boundaries[1:]), start=1):
+                crop, box, polygon = crop_polygon(image, b_left, b_right, upper, lower)
+                filename = f"{scan.stem}_line{line_number:02d}.png"
+                crop.save(lines_dir / filename)
+                line_flags = []
+                edge_hits = [
+                    0.0 if index == 1 else crossings[index - 2],
+                    0.0 if index == len(b_headlines) else crossings[index - 1],
+                ]
+                if max(edge_hits) > 0:
+                    line_flags.append("Boundary crosses detected ink; inspect touching characters")
+                if max(edge_hits) > 0.003:
+                    record["flags"].append(f"Line {line_number}: boundary crosses detected ink")
+                record["lines"].append({
+                    "line_id": filename[:-4], "file": "lines/" + filename,
+                    "sha256": digest(lines_dir / filename), "bbox_xyxy": box,
+                    "polygon_xy": polygon, "review_status": "pending", "flags": line_flags,
+                    "boundary_ink_fraction_top_bottom": edge_hits,
+                    "pixels": "Normalized RGB inside polygon; white outside; no spatial resampling",
+                })
+                if "rotation_degrees" in normalization:
+                    split = b_right - b_left
+                    edge_polygon = (polygon[:split] + [(b_right, int(upper[-1])), (b_right, int(lower[-1]))]
+                                    + polygon[split:])
+                    source_polygon = [source_point(x, y, normalization) for x, y in edge_polygon]
+                    x0, y0, x1, y1 = box
+                    corners = [source_point(x, y, normalization) for x in (x0, x1) for y in (y0, y1)]
+                    xs, ys = zip(*corners)
+                    record["lines"][-1].update(
+                        source_polygon_xy=source_polygon,
+                        source_bbox_xyxy=[min(xs), min(ys), max(xs), max(ys)],
+                    )
+                draw.line([tuple(point) for point in polygon + [polygon[0]]],
+                          fill=(220, 35, 35), width=max(1, image.width // 800))
+                draw.text((min(b_right + 4, image.width - 35), int(np.mean(upper))),
+                          f"L{line_number:02d}", fill=(220, 35, 35), stroke_width=max(0, image.width // 2500))
+                crop.thumbnail((1400, 170), Image.Resampling.LANCZOS)
+                thumbnails.append((line_number, crop.copy()))
+                line_number += 1
+        
+        if thumbnails:
+            sheet = Image.new("RGB", (1460, sum(crop.height + 26 for _, crop in thumbnails)), "white")
+            sheet_draw = ImageDraw.Draw(sheet)
+            y = 0
+            for number, thumbnail in thumbnails:
+                sheet_draw.text((5, y + 4), f"L{number:02d}", fill="black")
+                sheet.paste(thumbnail, (50, y + 18))
+                y += thumbnail.height + 26
+            sheet.save(destination / "line_contact_sheet.jpg", quality=92)
+            record["status"] = "draft_segmented"
+        else:
+            record["status"] = "review_only"
     overview.thumbnail((1800, 1800), Image.Resampling.LANCZOS)
     overview.save(destination / "page_review.jpg", quality=93)
     record["artifacts"] = {file.relative_to(destination).as_posix(): digest(file)
