@@ -291,6 +291,10 @@ def detect_layout(image, override):
         )
         leaf_regions = [(left, top, right, bottom)]
         use_folio_detection = folio_mode
+    elif folio_mode and override.get("single_folio"):
+        inset = override.get("folio_inset_fraction", (0.09, 0.09, 0.09, 0.10))
+        leaf_regions = [paper_text_region(gray, inset)]
+        use_folio_detection = True
     elif folio_mode:
         _, paper = cv2.threshold(gray, 60, 255, cv2.THRESH_BINARY)
         paper = cv2.morphologyEx(paper, cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8))
@@ -415,7 +419,8 @@ def detect_layout(image, override):
     }
 
 
-def gap_path(gray, left, right, upper_headline, lower_headline, ink_threshold, *, symmetric=False):
+def gap_path(gray, left, right, upper_headline, lower_headline, ink_threshold, *,
+             symmetric=False, protect_ink=False):
     """Find a low-ink path between neighbouring lines in native coordinates."""
     pitch = lower_headline - upper_headline
     if pitch < 4:
@@ -430,6 +435,12 @@ def gap_path(gray, left, right, upper_headline, lower_headline, ink_threshold, *
     darkness = np.maximum(0, ink_threshold + 40 - patch) / 80
     distance = (np.arange(low, high)[:, None] - center) / max(pitch, 1)
     cost = 180 * ink + darkness + 18 * distance ** 2
+    if protect_ink:
+        # A seam is the edge between two rows. Penalize splitting a stroke much
+        # more than keeping ink in the first row of the next crop.
+        above = gray[low - 1:high - 1, left:right] < ink_threshold
+        below = ink.astype(bool)
+        cost = 240 * (above & below) + 8 * (above | below) + darkness + 18 * distance ** 2
     row_count, column_count = cost.shape
     history = np.empty((row_count, column_count), dtype=np.int32)
     scores = cost[:, 0].copy()
@@ -449,7 +460,36 @@ def gap_path(gray, left, right, upper_headline, lower_headline, ink_threshold, *
         if column:
             position = int(history[position, column])
     hits = gray[seam, np.arange(left, right)] < ink_threshold
+    if protect_ink:
+        hits &= gray[seam - 1, np.arange(left, right)] < ink_threshold
     return seam, float(hits.mean())
+
+
+def protect_boundary_ink(ink, boundary, max_extension, image_top=0):
+    """Include short strokes straddling a seam in both neighbouring crops."""
+    columns = np.arange(len(boundary))
+    edge = boundary - image_top
+    split = ink[edge - 1, columns] & ink[edge, columns]
+    upper, lower = edge.copy(), edge.copy()
+    for _ in range(max_extension):
+        split_up = split & (upper > 0) & ink[np.maximum(0, upper - 1), columns]
+        split_down = split & (lower < ink.shape[0]) & ink[np.minimum(ink.shape[0] - 1, lower), columns]
+        upper -= split_up
+        lower += split_down
+    return upper + image_top, lower + image_top
+
+
+def line_ink_support(ink, upper, lower, pitch, image_top):
+    """Measure how much of a crop contains strokes taller than a thin rule."""
+    start, stop = int(upper.min()), int(lower.max())
+    rows = np.arange(start, stop)[:, None]
+    inside = (rows >= upper) & (rows < lower)
+    strokes = cv2.morphologyEx(
+        (ink[start - image_top:stop - image_top] & inside).astype(np.uint8), cv2.MORPH_OPEN,
+        np.ones((max(4, round(pitch * 0.24)), 1), np.uint8),
+        borderType=cv2.BORDER_CONSTANT, borderValue=0,
+    )
+    return float(strokes.any(axis=0).mean())
 
 
 def crop_polygon(image, left, right, top, bottom):
@@ -512,6 +552,7 @@ def export_page(path, destination, override, binding, scan=None, source_checksum
         lines_dir.mkdir(exist_ok=True)
         thumbnails = []
         line_number = 1
+        protect_ink = override.get("protect_line_ink", False)
         for block in blocks:
             b_left, b_top, b_right, b_bottom = block["roi"]
             b_headlines = block["headlines"]
@@ -524,7 +565,7 @@ def export_page(path, destination, override, binding, scan=None, source_checksum
             if override.get("check_outer_edges"):
                 region = b_detection_region or block["roi"]
                 rleft, rtop, rright, rbottom = region
-                contrast = gray if b_detection_region else folio_detection_gray(gray, region)
+                contrast = proc_gray if b_detection_region else folio_detection_gray(gray, region)
                 ink = contrast[rtop:rbottom, rleft:rright] < 243
                 edges = {"left": ink[:, :3], "top": ink[:3, :],
                          "right": ink[:, -3:], "bottom": ink[-3:, :]}
@@ -537,7 +578,7 @@ def export_page(path, destination, override, binding, scan=None, source_checksum
             for upper, lower in zip(b_headlines, b_headlines[1:]):
                 seam, fraction = gap_path(
                     proc_gray, b_left, b_right, upper, lower, b_ink_threshold,
-                    symmetric="detection_region" in block
+                    symmetric=b_detection_region is not None, protect_ink=protect_ink,
                 )
                 boundaries.append(seam)
                 crossings.append(fraction)
@@ -549,14 +590,36 @@ def export_page(path, destination, override, binding, scan=None, source_checksum
                 if spacing.min() < median * 0.65 or spacing.max() > median * 1.4:
                     record["flags"].append("Irregular spacing: inspect for a missed or extra line")
             
-            for index, (upper, lower) in enumerate(zip(boundaries, boundaries[1:]), start=1):
+            pairs = list(zip(boundaries, boundaries[1:]))
+            skip = set()
+            if protect_ink:
+                ink = proc_gray[b_top:b_bottom, b_left:b_right] < b_ink_threshold
+                pitch = block["pitch"]
+                support = [line_ink_support(ink, upper, lower, pitch, b_top) for upper, lower in pairs]
+                typical_support = float(np.median(support))
+                # A globally faint or thin hand is weak evidence for rejecting any band.
+                if typical_support >= 0.05:
+                    minimum_support = max(0.05, typical_support * 0.20)
+                    edge_indices = {index for index in (0, 1, len(pairs) - 2, len(pairs) - 1)
+                                    if 0 <= index < len(pairs)}
+                    skip = {index for index in edge_indices if support[index] < minimum_support}
+                if skip:
+                    record["flags"].append(f"Omitted {len(skip)} outer band(s) with insufficient handwriting")
+                extension = max(1, round(pitch * 0.20))
+                protected = [protect_boundary_ink(ink, edge, extension, b_top) for edge in boundaries[1:-1]]
+                pairs = list(zip([boundaries[0], *(upper for upper, _ in protected)],
+                                 [*(lower for _, lower in protected), boundaries[-1]]))
+
+            for index, (upper, lower) in enumerate(pairs):
+                if index in skip:
+                    continue
                 crop, box, polygon = crop_polygon(image, b_left, b_right, upper, lower)
                 filename = f"{scan.stem}_line{line_number:02d}.png"
                 crop.save(lines_dir / filename)
                 line_flags = []
                 edge_hits = [
-                    0.0 if index == 1 else crossings[index - 2],
-                    0.0 if index == len(b_headlines) else crossings[index - 1],
+                    0.0 if index == 0 else crossings[index - 1],
+                    0.0 if index == len(pairs) - 1 else crossings[index],
                 ]
                 if max(edge_hits) > 0:
                     line_flags.append("Boundary crosses detected ink; inspect touching characters")

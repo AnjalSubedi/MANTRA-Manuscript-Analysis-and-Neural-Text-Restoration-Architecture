@@ -1,17 +1,38 @@
 {
   "defaults": {
     "dark_scan_bed": true,
+    "single_folio": true,
     "rotation_degrees": 90,
     "folio_inset_fraction": [0.025, 0.025, 0.025, 0.025],
     "expected_line_count": [7, 15],
-    "check_outer_edges": true
+    "check_outer_edges": true,
+    "protect_line_ink": true
   },
   "satyanarayana_EAP272_1_2_9_000": {
     "action": "review_only",
     "reason": "Handwritten cover has a different layout"
   },
   "satyanarayana_EAP272_1_2_9_001": {
-    "roi_fraction": [0.10, 0.38, 0.97, 0.98]
+    "rotation_degrees": 270,
+    "roi_fraction": [0.03, 0.02, 0.90, 0.62]
+  },
+  "satyanarayana_EAP272_1_2_9_003": {
+    "rotation_degrees": 270
+  },
+  "satyanarayana_EAP272_1_2_9_013": {
+    "rotation_degrees": 270
+  },
+  "satyanarayana_EAP272_1_2_9_038": {
+    "rotation_degrees": 270
+  },
+  "satyanarayana_EAP272_1_2_9_039": {
+    "rotation_degrees": 270
+  },
+  "satyanarayana_EAP272_1_2_9_048": {
+    "rotation_degrees": 270
+  },
+  "satyanarayana_EAP272_1_2_9_049": {
+    "rotation_degrees": 270
   },
   "satyanarayana_EAP272_1_2_9_050": {
     "rotation_degrees": 270

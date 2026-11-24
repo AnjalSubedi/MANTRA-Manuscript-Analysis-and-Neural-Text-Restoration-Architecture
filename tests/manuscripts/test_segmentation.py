@@ -11,9 +11,29 @@ import pytest
 
 from manuscripts.segment_lines import (
     crop_polygon, detection_gray, discover_pages, export_page, folio_detection_gray,
-    gap_path, get_override_for_path, largest_band, line_headlines, normalize_scan,
-    paper_text_region, run, select_pages, source_point,
+    gap_path, get_override_for_path, largest_band, line_headlines, line_ink_support,
+    normalize_scan, paper_text_region, protect_boundary_ink, run, select_pages, source_point,
 )
+
+
+def test_ink_protection_extends_only_where_a_stroke_straddles_the_seam():
+    ink = np.zeros((12, 4), dtype=bool)
+    ink[3:8, 1] = True
+    ink[5:6, 2] = True
+    upper, lower = protect_boundary_ink(ink, np.full(4, 26), 3, image_top=20)
+    assert upper.tolist() == [26, 23, 26, 26]
+    assert lower.tolist() == [26, 28, 26, 26]
+
+
+def test_outer_band_support_distinguishes_a_rule_from_handwriting():
+    ink = np.zeros((40, 30), dtype=bool)
+    ink[2:4] = True
+    ink[6:8] = True
+    ink[10:12] = True
+    ink[22:31, 4:26:2] = True
+    top, middle, bottom = (np.full(30, row) for row in (0, 15, 40))
+    assert line_ink_support(ink, top, middle, 30, 0) == 0
+    assert line_ink_support(ink, middle, bottom, 30, 0) > 0.3
 
 
 def test_rotation_maps_crop_back_to_original_raster(tmp_path):
@@ -337,7 +357,8 @@ def test_uncertain_layout_page_falls_back_to_review_only(tmp_path):
     assert "Layout detection uncertain" in record["flags"][0]
 
 
-def test_two_leaf_manuscript_segments_both_leaves(tmp_path):
+@pytest.mark.parametrize("protect_ink", [False, True])
+def test_two_leaf_manuscript_segments_both_leaves(tmp_path, protect_ink):
     path = tmp_path / "two_leaves.png"
     pixels = np.full((400, 600, 3), 25, dtype=np.uint8)
     # Top leaf (paper at 200, ink lines at 60)
@@ -353,7 +374,7 @@ def test_two_leaf_manuscript_segments_both_leaves(tmp_path):
     Image.fromarray(pixels).save(path)
     output = tmp_path / "page"
     output.mkdir()
-    record = export_page(path, output, {}, {})
+    record = export_page(path, output, {"protect_line_ink": protect_ink}, {})
     assert record["status"] == "draft_segmented"
     assert len(record["lines"]) == 10
     assert [line["line_id"] for line in record["lines"]] == [
