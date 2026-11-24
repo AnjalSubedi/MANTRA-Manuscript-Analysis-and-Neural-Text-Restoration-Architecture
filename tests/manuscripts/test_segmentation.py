@@ -10,10 +10,68 @@ from PIL import Image
 import pytest
 
 from manuscripts.segment_lines import (
-    crop_polygon, detection_gray, discover_pages, export_page, folio_detection_gray,
-    gap_path, get_override_for_path, largest_band, line_headlines, line_ink_support,
-    normalize_scan, paper_text_region, protect_boundary_ink, run, select_pages, source_point,
+    crop_polygon, detect_layout, detection_gray, discover_pages, export_page, folio_detection_gray,
+    gap_path, get_override_for_path, has_handwriting_evidence, largest_band,
+    line_headlines, line_ink_support, normalize_scan, paper_text_region,
+    protect_boundary_ink, run, select_pages, source_point,
 )
+
+
+def test_nontext_filter_rejects_a_fold_and_keeps_short_handwriting():
+    fold = np.full((40, 200), 255, dtype=np.uint8)
+    fold[26:29] = 222
+    fold[18:29, 20:40] = 240
+    fold[17:29, 26:34] = 234
+    writing = np.full_like(fold, 255)
+    for x in (18, 27, 36):
+        writing[10:25, x:x + 3] = 234
+    upper, lower = np.zeros(200, dtype=int), np.full(200, 40)
+    assert not has_handwriting_evidence(fold, upper, lower, 36, 0)
+    assert has_handwriting_evidence(writing, upper, lower, 36, 0)
+
+
+@pytest.mark.parametrize("bands", [True, [[0, 0.45], [0.55, 1]]])
+def test_stacked_text_blocks_stop_at_the_fold(bands):
+    pixels = np.full((320, 440, 3), 220, dtype=np.uint8)
+    for y in (25, 48, 71, 94, 117, 192, 215, 238, 261, 284):
+        for x in range(36, 400, 24):
+            pixels[y:y + 8, x:x + 14] = 60
+    layout = detect_layout(Image.fromarray(pixels), {
+        "roi_fraction": [0.04, 0.02, 0.96, 0.99], "split_text_bands": bands,
+    })
+    upper, lower = layout["blocks"]
+    assert len(upper["headlines"]) == len(lower["headlines"]) == 5
+    assert 125 < upper["roi"][3] <= lower["roi"][1] < 192
+
+
+def test_explicit_regions_keep_reading_order_and_exclude_chart(tmp_path):
+    source = tmp_path / "scan.png"
+    image = Image.new("RGB", (200, 180), (220, 220, 220))
+    image.paste((0, 0, 0), (0, 130, 200, 180))
+    image.save(source)
+    output = tmp_path / "page"
+    output.mkdir()
+    record = export_page(source, output, {"regions": [
+        {"roi_fraction": [0.55, 0.10, 0.95, 0.50], "single_line": True},
+        {"roi_fraction": [0.05, 0.10, 0.45, 0.50], "headlines_fraction": [0.30]},
+    ]}, {})
+    assert [line["bbox_xyxy"] for line in record["lines"]] == [
+        [110, 18, 190, 90], [10, 18, 90, 90],
+    ]
+
+
+def test_unresolved_explicit_region_is_reported_when_another_region_exports(tmp_path):
+    source = tmp_path / "scan.png"
+    Image.new("RGB", (200, 180), "white").save(source)
+    output = tmp_path / "page"
+    output.mkdir()
+    record = export_page(source, output, {"regions": [
+        {"roi_fraction": [0.05, 0.05, 0.95, 0.45]},
+        {"roi_fraction": [0.05, 0.55, 0.95, 0.95], "single_line": True},
+    ]}, {})
+    assert record["layout"]["unresolved_regions"] == [1]
+    assert "No lines detected in text region 1; inspect this region" in record["flags"]
+    assert len(record["lines"]) == 1
 
 
 def test_ink_protection_extends_only_where_a_stroke_straddles_the_seam():

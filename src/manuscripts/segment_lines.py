@@ -253,7 +253,62 @@ def line_headlines(profile, page_width):
     return sorted(selected), pitch
 
 
+def fraction_box(fraction, width, height):
+    if len(fraction) != 4 or not all(0 <= value <= 1 for value in fraction):
+        raise ValueError("ROI fractions must be four values between zero and one")
+    left, top, right, bottom = (
+        round(value * scale) for value, scale in zip(fraction, (width, height, width, height))
+    )
+    if left >= right or top >= bottom:
+        raise ValueError("Text region must have positive area within the image")
+    return left, top, right, bottom
+
+
+def split_text_bands(gray, region):
+    """Split stacked text blocks at unusually wide gaps in the handwriting."""
+    left, top, right, bottom = region
+    height, width = bottom - top, right - left
+    contrast = folio_detection_gray(gray, region)
+    inset = width // 10
+    ink = contrast[top:bottom, left + inset:right - inset] < 243
+    density = ink.mean(axis=1)
+    active = density > max(0.025, float(density.max()) * 0.18)
+    transitions = np.flatnonzero(np.diff(np.r_[True, active, True]))
+    minimum_gap = max(12, round(height * 0.035))
+    gaps = [(start, stop) for start, stop in zip(transitions[::2], transitions[1::2])
+            if 0 < start < stop < height]
+    line_gaps = [stop - start for start, stop in gaps if stop - start >= max(3, height * 0.008)]
+    if len(line_gaps) >= 3:
+        minimum_gap = max(minimum_gap, round(2 * float(np.median(line_gaps))))
+    cuts = [top]
+    for start, stop in gaps:
+        if stop - start >= minimum_gap:
+            cuts.append(top + (start + stop) // 2)
+    cuts.append(bottom)
+    return [(left, start, right, stop) for start, stop in zip(cuts, cuts[1:])]
+
+
+def text_band_regions(gray, regions, setting):
+    """Use projection gaps or configured vertical spans within each leaf."""
+    if setting is True:
+        return [band for region in regions for band in split_text_bands(gray, region)]
+    previous = 0
+    if not isinstance(setting, list) or any(
+        not isinstance(span, list) or len(span) != 2 for span in setting
+    ):
+        raise ValueError("split_text_bands must be true or a list of fractional ranges")
+    for start, stop in setting:
+        if not 0 <= previous <= start < stop <= 1:
+            raise ValueError("Text band ranges must be ordered, nonoverlapping fractions")
+        previous = stop
+    return [
+        (left, top + round((bottom - top) * start), right, top + round((bottom - top) * stop))
+        for left, top, right, bottom in regions for start, stop in setting
+    ]
+
+
 def detect_layout(image, override):
+    """Find text blocks in the normalized image or use ordered region overrides."""
     width, height = image.size
     scale = min(1.0, 1600 / width)
     analysis_width = round(width * scale)
@@ -281,15 +336,18 @@ def detect_layout(image, override):
     )
     mask = (gray < threshold).astype(np.uint8)
     
-    if "roi_fraction" in override:
-        fraction = override["roi_fraction"]
-        if len(fraction) != 4 or not all(0 <= value <= 1 for value in fraction):
-            raise ValueError("ROI fractions must be four values between zero and one")
-        left, top, right, bottom = (
-            round(fraction[0] * analysis_width), round(fraction[1] * analysis_height),
-            round(fraction[2] * analysis_width), round(fraction[3] * analysis_height),
-        )
-        leaf_regions = [(left, top, right, bottom)]
+    explicit_regions = override.get("regions")
+    if explicit_regions is not None:
+        if not isinstance(explicit_regions, list) or not explicit_regions:
+            raise ValueError("regions must be a nonempty list of text regions in reading order")
+        if any(not isinstance(region, dict) or "roi_fraction" not in region
+               for region in explicit_regions):
+            raise ValueError("Each text region needs an roi_fraction")
+        leaf_regions = [fraction_box(region["roi_fraction"], analysis_width, analysis_height)
+                        for region in explicit_regions]
+        use_folio_detection = True
+    elif "roi_fraction" in override:
+        leaf_regions = [fraction_box(override["roi_fraction"], analysis_width, analysis_height)]
         use_folio_detection = folio_mode
     elif folio_mode and override.get("single_folio"):
         inset = override.get("folio_inset_fraction", (0.09, 0.09, 0.09, 0.10))
@@ -334,9 +392,17 @@ def detect_layout(image, override):
         leaf_regions = [(left, top, right, bottom)]
         use_folio_detection = False
 
+    band_setting = override.get("split_text_bands", False) if explicit_regions is None else False
+    if band_setting:
+        leaf_regions = text_band_regions(gray, leaf_regions, band_setting)
+        use_folio_detection = True
+
     blocks = []
-    for b_left, b_top, b_right, b_bottom in leaf_regions:
+    unresolved = []
+    for index, (b_left, b_top, b_right, b_bottom) in enumerate(leaf_regions):
         if not (0 <= b_left < b_right <= analysis_width and 0 <= b_top < b_bottom <= analysis_height):
+            if explicit_regions is not None or band_setting:
+                unresolved.append(index + 1)
             continue
         detection_region = (b_left, b_top, b_right, b_bottom)
         if use_folio_detection:
@@ -347,8 +413,14 @@ def detect_layout(image, override):
             b_threshold = float(threshold)
             b_mask = mask
         
-        if "headlines_fraction" in override and len(leaf_regions) == 1:
-            headlines = [round(value * analysis_height) for value in override["headlines_fraction"]]
+        settings = explicit_regions[index] if explicit_regions is not None else (
+            override if len(leaf_regions) == 1 else {}
+        )
+        if settings.get("single_line"):
+            headlines = [(b_top + b_bottom) // 2]
+            pitch = b_bottom - b_top
+        elif "headlines_fraction" in settings:
+            headlines = [round(value * analysis_height) for value in settings["headlines_fraction"]]
             if not headlines or any(not b_top <= value < b_bottom for value in headlines):
                 raise ValueError("Explicit headlines must fall within the text region")
             if headlines != sorted(set(headlines)):
@@ -363,6 +435,8 @@ def detect_layout(image, override):
                 headlines = [proj_top + position for position in positions]
                 pitch = pitch or b_bottom - b_top
             except ValueError:
+                if explicit_regions is not None or band_setting:
+                    unresolved.append(index + 1)
                 continue
         
         if not headlines:
@@ -373,6 +447,8 @@ def detect_layout(image, override):
         pad_right = min(analysis_width, b_right + padding)
         pad_top = max(0, min(b_top, headlines[0]) - round(pitch * 0.65))
         pad_bottom = min(analysis_height, max(b_bottom, headlines[-1]) + round(pitch * 0.45))
+        if explicit_regions is not None or band_setting:
+            pad_left, pad_top, pad_right, pad_bottom = b_left, b_top, b_right, b_bottom
         
         native_roi = [
             math.floor(pad_left * width / analysis_width),
@@ -388,6 +464,8 @@ def detect_layout(image, override):
             "headlines": native_headlines,
             "pitch": native_pitch,
             "ink_threshold": float(b_threshold),
+            **({"explicit_headlines": True}
+               if settings.get("single_line") or "headlines_fraction" in settings else {}),
             **({"detection_region": [
                 round(value * (width / analysis_width if i % 2 == 0 else height / analysis_height))
                 for i, value in enumerate(detection_region)
@@ -396,10 +474,11 @@ def detect_layout(image, override):
 
     if not blocks:
         raise ValueError("No usable text blocks detected")
+    warnings = {"unresolved_regions": unresolved} if unresolved else {}
     
     primary = blocks[0]
     if len(blocks) == 1:
-        return {**primary, "blocks": blocks}
+        return {**primary, "blocks": blocks, **warnings}
     
     overall_roi = [
         min(b["roi"][0] for b in blocks),
@@ -415,6 +494,7 @@ def detect_layout(image, override):
         "pitch": median_pitch,
         "ink_threshold": primary["ink_threshold"],
         "blocks": blocks,
+        **warnings,
         **({"detection_region": primary["detection_region"]} if "detection_region" in primary else {}),
     }
 
@@ -492,6 +572,17 @@ def line_ink_support(ink, upper, lower, pitch, image_top):
     return float(strokes.any(axis=0).mean())
 
 
+def has_handwriting_evidence(contrast, upper, lower, pitch, image_top):
+    """Distinguish character-height ink from faint paper texture and thin rules."""
+    stronger = line_ink_support(contrast < 236, upper, lower, pitch, image_top)
+    if stronger < 0.02:
+        return False
+    if stronger >= 0.075:
+        return True
+    weaker = line_ink_support(contrast < 243, upper, lower, pitch, image_top)
+    return stronger >= weaker * 0.60
+
+
 def crop_polygon(image, left, right, top, bottom):
     """Extract unchanged source pixels inside an exclusive-bottom polygon mask."""
     width, height = image.size
@@ -533,6 +624,8 @@ def export_page(path, destination, override, binding, scan=None, source_checksum
         try:
             layout = detect_layout(image, override)
             record["layout"] = layout
+            for region in layout.get("unresolved_regions", []):
+                record["flags"].append(f"No lines detected in text region {region}; inspect this region")
             if "expected_line_count" in override:
                 minimum, maximum = override["expected_line_count"]
                 if not 1 <= minimum <= maximum:
@@ -553,7 +646,8 @@ def export_page(path, destination, override, binding, scan=None, source_checksum
         thumbnails = []
         line_number = 1
         protect_ink = override.get("protect_line_ink", False)
-        for block in blocks:
+        filter_nontext = override.get("filter_nontext_crops", False)
+        for block_number, block in enumerate(blocks, 1):
             b_left, b_top, b_right, b_bottom = block["roi"]
             b_headlines = block["headlines"]
             b_ink_threshold = block["ink_threshold"]
@@ -592,6 +686,18 @@ def export_page(path, destination, override, binding, scan=None, source_checksum
             
             pairs = list(zip(boundaries, boundaries[1:]))
             skip = set()
+            if filter_nontext and not block.get("explicit_headlines"):
+                contrast = proc_gray if b_detection_region else folio_detection_gray(gray, block["roi"])
+                contrast = contrast[b_top:b_bottom, b_left:b_right]
+                for index, (upper, lower) in enumerate(pairs):
+                    if not has_handwriting_evidence(contrast, upper, lower, block["pitch"], b_top):
+                        skip.add(index)
+                        record.setdefault("rejected_crops", []).append({
+                            "block": block_number, "candidate": index + 1,
+                            "headline_y": b_headlines[index],
+                            "bbox_xyxy": [b_left, int(upper.min()), b_right, int(lower.max())],
+                            "reason": "Insufficient handwriting evidence",
+                        })
             if protect_ink:
                 ink = proc_gray[b_top:b_bottom, b_left:b_right] < b_ink_threshold
                 pitch = block["pitch"]
@@ -602,9 +708,10 @@ def export_page(path, destination, override, binding, scan=None, source_checksum
                     minimum_support = max(0.05, typical_support * 0.20)
                     edge_indices = {index for index in (0, 1, len(pairs) - 2, len(pairs) - 1)
                                     if 0 <= index < len(pairs)}
-                    skip = {index for index in edge_indices if support[index] < minimum_support}
-                if skip:
-                    record["flags"].append(f"Omitted {len(skip)} outer band(s) with insufficient handwriting")
+                    weak_edges = {index for index in edge_indices if support[index] < minimum_support} - skip
+                    if weak_edges:
+                        skip.update(weak_edges)
+                        record["flags"].append(f"Omitted {len(weak_edges)} outer band(s) with insufficient handwriting")
                 extension = max(1, round(pitch * 0.20))
                 protected = [protect_boundary_ink(ink, edge, extension, b_top) for edge in boundaries[1:-1]]
                 pairs = list(zip([boundaries[0], *(upper for upper, _ in protected)],
@@ -651,7 +758,9 @@ def export_page(path, destination, override, binding, scan=None, source_checksum
                 crop.thumbnail((1400, 170), Image.Resampling.LANCZOS)
                 thumbnails.append((line_number, crop.copy()))
                 line_number += 1
-        
+        if record.get("rejected_crops"):
+            record["flags"].append(f"Omitted {len(record['rejected_crops'])} crop(s) with insufficient handwriting evidence")
+
         if thumbnails:
             sheet = Image.new("RGB", (1460, sum(crop.height + 26 for _, crop in thumbnails)), "white")
             sheet_draw = ImageDraw.Draw(sheet)

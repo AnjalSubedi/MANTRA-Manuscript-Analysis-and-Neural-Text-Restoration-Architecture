@@ -1,0 +1,62 @@
+{
+  "defaults": {
+    "dark_scan_bed": true,
+    "single_folio": true,
+    "folio_inset_fraction": [0.055, 0.05, 0.045, 0.05],
+    "split_text_bands": [[0, 0.485], [0.52, 1]],
+    "protect_line_ink": true,
+    "filter_nontext_crops": true,
+    "check_outer_edges": true
+  },
+  "Pinasako_Katha_EAP272_1_2_37_001": {
+    "regions": [
+      {"roi_fraction": [0.055, 0.055, 0.97, 0.21],
+       "headlines_fraction": [0.092, 0.162]},
+      {"roi_fraction": [0.14, 0.21, 0.963, 0.435],
+       "headlines_fraction": [0.263, 0.32, 0.39]},
+      {"roi_fraction": [0.325, 0.435, 0.61, 0.525], "single_line": true}
+    ]
+  },
+  "Pinasako_Katha_EAP272_1_2_37_002": {
+    "regions": [
+      {"roi_fraction": [0.065, 0.035, 0.97, 0.395]},
+      {"roi_fraction": [0.065, 0.407, 0.97, 0.749]}
+    ]
+  },
+  "Pinasako_Katha_EAP272_1_2_37_006": {
+    "regions": [
+      {"roi_fraction": [0.075, 0.067, 0.66, 0.165], "single_line": true}
+    ]
+  },
+  "Pinasako_Katha_EAP272_1_2_37_007": {
+    "regions": [
+      {"roi_fraction": [0.095, 0.08, 0.973, 0.456],
+       "headlines_fraction": [0.12, 0.19, 0.257, 0.326, 0.4]},
+      {"roi_fraction": [0.095, 0.534, 0.973, 0.89],
+       "headlines_fraction": [0.561, 0.623, 0.693, 0.76, 0.825]}
+    ]
+  },
+  "Pinasako_Katha_EAP272_1_2_37_010": {
+    "regions": [
+      {"roi_fraction": [0.07, 0.04, 0.46, 0.493]},
+      {"roi_fraction": [0.545, 0.04, 0.97, 0.493]},
+      {"roi_fraction": [0.07, 0.505, 0.46, 0.81]},
+      {"roi_fraction": [0.545, 0.505, 0.97, 0.852]}
+    ]
+  },
+  "Pinasako_Katha_EAP272_1_2_37_011": {
+    "regions": [
+      {"roi_fraction": [0.09, 0.052, 0.35, 0.125], "single_line": true},
+      {"roi_fraction": [0.09, 0.397, 0.945, 0.705],
+       "headlines_fraction": [0.438, 0.48, 0.52, 0.56, 0.606, 0.65]}
+    ]
+  },
+  "Pinasako_Katha_EAP272_1_2_37_020": {
+    "action": "review_only",
+    "reason": "Torn leaves and mixed annotations need manually verified regions"
+  },
+  "Pinasako_Katha_EAP272_1_2_37_021": {
+    "action": "review_only",
+    "reason": "Drawings and faint annotations need manually verified regions"
+  }
+}
