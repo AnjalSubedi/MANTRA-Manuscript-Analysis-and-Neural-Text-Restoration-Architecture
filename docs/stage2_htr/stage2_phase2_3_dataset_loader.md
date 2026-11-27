@@ -139,11 +139,49 @@ For `torch.nn.CTCLoss`:
 - `<BLANK>` (id 0) is the CTC blank token — it never appears in target labels.
 - Labels are flat-concatenated in the collate function (not padded).
 - `label_lengths` gives the per-sample label length.
-- `processed_widths` gives the per-sample image width (before batch padding). The model's downsampling factor converts this to CTC `input_lengths` later.
+- `processed_widths` gives each image's resized width before batch padding. The CRNN maps width to valid CTC steps with `width // 4`.
+
+Pass the image tensor and widths from a loader batch into the model, then use
+the same input lengths for CTC loss and decoding.
+
+```python
+from stage2_htr.ctc import ctc_loss, greedy_decode
+from stage2_htr.metrics import character_error_rate
+from stage2_htr.model import CRNN
+
+model = CRNN(dataset.num_classes, image_height=dataset.image_height)
+log_probs, input_lengths = model(batch["images"], batch["processed_widths"])
+loss = ctc_loss(log_probs, batch["labels"], input_lengths, batch["label_lengths"])
+predictions = greedy_decode(log_probs, input_lengths, dataset.id_to_char)
+cer = character_error_rate(predictions, batch["texts"])
+```
+
+`log_probs` has shape `[time, batch, classes]` and the class count includes
+the CTC blank. Each adjacent repeated character in a target requires an
+extra time step for a blank. CTC loss raises an error when an alignment
+needs more steps than the model returned. CER divides total edits across
+all lines by the total number of reference code points, including spaces.
 
 ---
 
 ## 8. Commands
+
+### CPU tiny-batch check
+
+Fit four fixed lines from the configured training split and verify the
+saved predictions in a separate process. The run directory must be new.
+
+```powershell
+$runDir = "outputs/crnn_ctc/tiny_batch"
+py src/stage2_htr/overfit_batch.py train --indices 1443 4382 32510 67840 --output-dir $runDir
+py src/stage2_htr/overfit_batch.py verify "$runDir/checkpoint.pt"
+```
+
+The report records CTC loss, CER, and the expected and predicted text for
+each sampled line.
+
+See the [CRNN–CTC training guide](crnn_ctc_training.md) for full training,
+validation, checkpoint resume, and Kaggle setup.
 
 ### Quick sample inspection
 ```bash

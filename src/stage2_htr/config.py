@@ -9,7 +9,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CONFIG = PROJECT_ROOT / "configs/stage2_data_synth100k.yaml"
 
 
-def load_data_config(path=DEFAULT_CONFIG):
+def load_data_config(path=DEFAULT_CONFIG, *, project_root=PROJECT_ROOT):
     with open(path, encoding="utf-8") as stream:
         config = yaml.safe_load(stream)
     dataset = config["dataset"]
@@ -31,7 +31,7 @@ def load_data_config(path=DEFAULT_CONFIG):
     if dataset.get("pixel_range", [0.0, 1.0]) != [0.0, 1.0]:
         raise ValueError("Only pixel_range [0.0, 1.0] is supported")
     config["paths"] = {
-        key: str(PROJECT_ROOT / value) for key, value in config["paths"].items()
+        key: str(Path(project_root) / value) for key, value in config["paths"].items()
     }
     return config
 

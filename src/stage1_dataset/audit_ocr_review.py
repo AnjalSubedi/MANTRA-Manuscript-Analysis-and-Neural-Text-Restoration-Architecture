@@ -15,16 +15,7 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from stage1_dataset.chromium_text_renderer import get_chromium_renderer, shutdown_chromium_renderer
-
-
-def edit_distance(first, second):
-    previous = list(range(len(second) + 1))
-    for i, left in enumerate(first, 1):
-        current = [i]
-        for j, right in enumerate(second, 1):
-            current.append(min(current[-1] + 1, previous[j] + 1, previous[j - 1] + (left != right)))
-        previous = current
-    return previous[-1]
+from stage2_htr.metrics import edit_distance
 
 
 def main():
