@@ -1,0 +1,95 @@
+{
+  "schema_version": 1,
+  "initial_charset_sha256": "dc58492e7342fee28d8fa13452e3d34cd535784e04129449cef8aaa5c042b91a",
+  "initial_checkpoint_sha256": "8feca8159fa0185d692b2dc4cb6286b82b68f0dc332cac8d0197231369d526c5",
+  "documents": {
+    "Tsum_0001_0023": {
+      "split": "train",
+      "numbered_body_lines": 6,
+      "scored_lines": 6,
+      "source_rgb_sha256": "cf9a5ee2eb69be69823b10e8c6ee0b4fc8b6da694101fc3d16c5662bf2a5c93a",
+      "source_size": [
+        1000,
+        750
+      ],
+      "edition": "https://nepalica.hadw-bw.de/nepal/editions/show/37098"
+    },
+    "Tsum_0001_0019": {
+      "split": "train",
+      "numbered_body_lines": 6,
+      "scored_lines": 6,
+      "source_rgb_sha256": "b98e623a2186908135bbb14b97edd5e5eb90ffae5e72918be1fb5cd578525001",
+      "source_size": [
+        1000,
+        750
+      ],
+      "edition": "https://nepalica.hadw-bw.de/nepal/editions/show/37099"
+    },
+    "L_0922_0002": {
+      "split": "train",
+      "numbered_body_lines": 48,
+      "scored_lines": 37,
+      "source_rgb_sha256": "ba21486daff914ca94cae56d6ec5746a4db3262c2b8c33dc2e7dff34cb7a1345",
+      "source_size": [
+        501,
+        800
+      ],
+      "edition": "https://nepalica.hadw-bw.de/nepal/editions/show/48822"
+    },
+    "E_1448_0015": {
+      "split": "train",
+      "numbered_body_lines": 29,
+      "scored_lines": 29,
+      "source_rgb_sha256": "c636198ade0a12472374c9eca9f95363283d8b70276cf7ee1787ae3e36daad26",
+      "source_size": [
+        548,
+        800
+      ],
+      "edition": "https://nepalica.hadw-bw.de/nepal/editions/show/36094"
+    },
+    "PD_0002_0001": {
+      "split": "val",
+      "numbered_body_lines": 16,
+      "scored_lines": 16,
+      "source_rgb_sha256": "7c1216b31d6eab569c220ea2624a80f2a067006629ceee3383768a40b36252bf",
+      "source_size": [
+        580,
+        800
+      ],
+      "edition": "https://nepalica.hadw-bw.de/nepal/editions/show/42854"
+    },
+    "LD_0001_0001": {
+      "split": "test",
+      "numbered_body_lines": 15,
+      "scored_lines": 14,
+      "source_rgb_sha256": "b8ebaf24d8b8b97f0fac7882ebfacf4d8c8a58da6e3dc9814a04d5a8081b1de8",
+      "source_size": [
+        521,
+        800
+      ],
+      "edition": "https://nepalica.hadw-bw.de/nepal/editions/show/16358"
+    },
+    "Tsum_0001_0010": {
+      "split": "test",
+      "numbered_body_lines": 9,
+      "scored_lines": 7,
+      "source_rgb_sha256": "5d12a6556bf17546cbcce3dff80f32919e5aa70b26b92ea43cace9623f38eaf3",
+      "source_size": [
+        1000,
+        667
+      ],
+      "edition": "https://nepalica.hadw-bw.de/nepal/editions/show/36092"
+    },
+    "Tsum_0001_0009": {
+      "split": "test",
+      "numbered_body_lines": 2,
+      "scored_lines": 2,
+      "source_rgb_sha256": "f2c30213efe1e4855c7c92d50aef44fb998c382fc03a46978f68c4d7d16c89c2",
+      "source_size": [
+        1000,
+        667
+      ],
+      "edition": "https://nepalica.hadw-bw.de/nepal/editions/show/28167"
+    }
+  }
+}

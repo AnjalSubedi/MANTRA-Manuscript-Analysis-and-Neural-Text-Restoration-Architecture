@@ -1,0 +1,926 @@
+{
+  "schema_version": 1,
+  "cer_unit": "ratio",
+  "cer_definition": "Total character edits divided by total reference Unicode code points.",
+  "synthetic_baseline": {
+    "release": "label_review_v1",
+    "training_revision": "a28192166bfccbe22724aefec23f3b0d4287b87d",
+    "training_settings": {
+      "seed": 42,
+      "epochs": 10,
+      "hidden_size": 128,
+      "learning_rate": 0.001,
+      "weight_decay": 0.0001,
+      "gradient_clip": 5.0,
+      "width_bucket_batches": 32,
+      "checkpoint_every_steps": 500,
+      "log_every_steps": 100
+    },
+    "batch_size": 16,
+    "vocabulary_size_including_blank": 98,
+    "line_counts": {
+      "train": 79243,
+      "val": 12649,
+      "test": 8108
+    },
+    "selected_checkpoint": {
+      "epoch": 10,
+      "validation_cer": 0.020216284604030486,
+      "validation_loss": 0.09436388049710268
+    },
+    "checkpoint_sha256": "8feca8159fa0185d692b2dc4cb6286b82b68f0dc332cac8d0197231369d526c5",
+    "data_sha256": {
+      "manifest_train": "633d04a3b9be4744aa1b844c5e220a3537c320be68884af80ba2c69126c16df7",
+      "manifest_val": "fc848e854eab9334af5404ae6e777001c322804fb55140bad0a37eb306443d96",
+      "charset_json": "dc58492e7342fee28d8fa13452e3d34cd535784e04129449cef8aaa5c042b91a"
+    },
+    "validation_history": [
+      {
+        "epoch": 1,
+        "optimizer_steps": 4953,
+        "training_ctc_loss": 1.6043378295282615,
+        "validation": {
+          "loss": 0.21005734757468938,
+          "cer": 0.05665933668705003,
+          "edits": 47023,
+          "reference_characters": 829925,
+          "lines": 12649
+        }
+      },
+      {
+        "epoch": 2,
+        "optimizer_steps": 9906,
+        "training_ctc_loss": 0.10286894643470368,
+        "validation": {
+          "loss": 0.1645820434715109,
+          "cer": 0.04111576347260295,
+          "edits": 34123,
+          "reference_characters": 829925,
+          "lines": 12649
+        }
+      },
+      {
+        "epoch": 3,
+        "optimizer_steps": 14859,
+        "training_ctc_loss": 0.056764949908485664,
+        "validation": {
+          "loss": 0.10203166000491423,
+          "cer": 0.027402476127360905,
+          "edits": 22742,
+          "reference_characters": 829925,
+          "lines": 12649
+        }
+      },
+      {
+        "epoch": 4,
+        "optimizer_steps": 19812,
+        "training_ctc_loss": 0.040084054881670564,
+        "validation": {
+          "loss": 0.11279529563070088,
+          "cer": 0.027590444919721662,
+          "edits": 22898,
+          "reference_characters": 829925,
+          "lines": 12649
+        }
+      },
+      {
+        "epoch": 5,
+        "optimizer_steps": 24765,
+        "training_ctc_loss": 0.03145671691589443,
+        "validation": {
+          "loss": 0.09886817806454476,
+          "cer": 0.023526222248998405,
+          "edits": 19525,
+          "reference_characters": 829925,
+          "lines": 12649
+        }
+      },
+      {
+        "epoch": 6,
+        "optimizer_steps": 29718,
+        "training_ctc_loss": 0.02535671444474299,
+        "validation": {
+          "loss": 0.09649698354326809,
+          "cer": 0.024766093321685695,
+          "edits": 20554,
+          "reference_characters": 829925,
+          "lines": 12649
+        }
+      },
+      {
+        "epoch": 7,
+        "optimizer_steps": 34671,
+        "training_ctc_loss": 0.021357220101587686,
+        "validation": {
+          "loss": 0.1043075715654857,
+          "cer": 0.02411784197367232,
+          "edits": 20016,
+          "reference_characters": 829925,
+          "lines": 12649
+        }
+      },
+      {
+        "epoch": 8,
+        "optimizer_steps": 39624,
+        "training_ctc_loss": 0.01817139154993153,
+        "validation": {
+          "loss": 0.10341210977740321,
+          "cer": 0.02381420007832033,
+          "edits": 19764,
+          "reference_characters": 829925,
+          "lines": 12649
+        }
+      },
+      {
+        "epoch": 9,
+        "optimizer_steps": 44577,
+        "training_ctc_loss": 0.01618411561727758,
+        "validation": {
+          "loss": 0.12625919843895256,
+          "cer": 0.027128957435912884,
+          "edits": 22515,
+          "reference_characters": 829925,
+          "lines": 12649
+        }
+      },
+      {
+        "epoch": 10,
+        "optimizer_steps": 49530,
+        "training_ctc_loss": 0.014871072291552387,
+        "validation": {
+          "loss": 0.09436388049710268,
+          "cer": 0.020216284604030486,
+          "edits": 16778,
+          "reference_characters": 829925,
+          "lines": 12649
+        }
+      }
+    ],
+    "test": {
+      "lines": 8108,
+      "reference_characters": 462726,
+      "character_edits": 3669,
+      "cer": 0.007929098429740279,
+      "exact_matches": 5773,
+      "exact_line_rate": 0.7120128268376912,
+      "manifest_sha256": "f813a664667c91aead68c4c3f31e0d7c2200994cc627ff21b7b858d4c64bb476"
+    }
+  },
+  "manuscript_baseline_diagnostics": {
+    "royal_land_grant": {
+      "all": {
+        "diplomatic": {
+          "lines": 17,
+          "reference_characters": 893,
+          "edits": 676,
+          "cer": 0.7569988801791714,
+          "exact_lines": 0
+        },
+        "without_spaces_or_formatting": {
+          "lines": 17,
+          "reference_characters": 888,
+          "edits": 612,
+          "cer": 0.6891891891891891,
+          "exact_lines": 0
+        }
+      },
+      "body": {
+        "diplomatic": {
+          "lines": 15,
+          "reference_characters": 867,
+          "edits": 656,
+          "cer": 0.7566320645905421,
+          "exact_lines": 0
+        },
+        "without_spaces_or_formatting": {
+          "lines": 15,
+          "reference_characters": 862,
+          "edits": 592,
+          "cer": 0.6867749419953596,
+          "exact_lines": 0
+        }
+      },
+      "body_excluding_watermark": {
+        "diplomatic": {
+          "lines": 14,
+          "reference_characters": 821,
+          "edits": 582,
+          "cer": 0.7088915956151035,
+          "exact_lines": 0
+        },
+        "without_spaces_or_formatting": {
+          "lines": 14,
+          "reference_characters": 816,
+          "edits": 529,
+          "cer": 0.6482843137254902,
+          "exact_lines": 0
+        }
+      },
+      "heading": {
+        "diplomatic": {
+          "lines": 1,
+          "reference_characters": 15,
+          "edits": 9,
+          "cer": 0.6,
+          "exact_lines": 0
+        },
+        "without_spaces_or_formatting": {
+          "lines": 1,
+          "reference_characters": 15,
+          "edits": 9,
+          "cer": 0.6,
+          "exact_lines": 0
+        }
+      },
+      "watermarked_line": {
+        "diplomatic": {
+          "lines": 1,
+          "reference_characters": 46,
+          "edits": 74,
+          "cer": 1.608695652173913,
+          "exact_lines": 0
+        },
+        "without_spaces_or_formatting": {
+          "lines": 1,
+          "reference_characters": 46,
+          "edits": 63,
+          "cer": 1.3695652173913044,
+          "exact_lines": 0
+        }
+      },
+      "endorsement": {
+        "diplomatic": {
+          "lines": 1,
+          "reference_characters": 11,
+          "edits": 11,
+          "cer": 1.0,
+          "exact_lines": 0
+        },
+        "without_spaces_or_formatting": {
+          "lines": 1,
+          "reference_characters": 11,
+          "edits": 11,
+          "cer": 1.0,
+          "exact_lines": 0
+        }
+      }
+    },
+    "seven_additional_manuscripts": {
+      "original": {
+        "lines": 116,
+        "scored_lines": 103,
+        "edits": 5466,
+        "reference_characters": 5685,
+        "cer": 0.9614775725593667,
+        "exact_lines": 0
+      },
+      "straightened": {
+        "lines": 116,
+        "scored_lines": 103,
+        "edits": 5478,
+        "reference_characters": 5685,
+        "cer": 0.9635883905013193,
+        "exact_lines": 0
+      },
+      "straightened_without_spaces_or_formatting": {
+        "lines": 116,
+        "scored_lines": 103,
+        "edits": 5151,
+        "reference_characters": 5616,
+        "cer": 0.9172008547008547,
+        "exact_lines": 0
+      }
+    },
+    "per_manuscript": [
+      {
+        "identifier": "Tsum_0001_0023",
+        "document": "Salt auction receipt",
+        "original": {
+          "lines": 6,
+          "scored_lines": 6,
+          "edits": 328,
+          "reference_characters": 218,
+          "cer": 1.5045871559633028,
+          "exact_lines": 0
+        },
+        "straightened": {
+          "lines": 6,
+          "scored_lines": 6,
+          "edits": 211,
+          "reference_characters": 218,
+          "cer": 0.9678899082568807,
+          "exact_lines": 0
+        },
+        "straightened_without_spaces_or_formatting": {
+          "lines": 6,
+          "scored_lines": 6,
+          "edits": 195,
+          "reference_characters": 213,
+          "cer": 0.9154929577464789,
+          "exact_lines": 0
+        },
+        "unscored_reasons": {}
+      },
+      {
+        "identifier": "Tsum_0001_0010",
+        "document": "Summons to salt traders",
+        "original": {
+          "lines": 9,
+          "scored_lines": 7,
+          "edits": 226,
+          "reference_characters": 247,
+          "cer": 0.9149797570850202,
+          "exact_lines": 0
+        },
+        "straightened": {
+          "lines": 9,
+          "scored_lines": 7,
+          "edits": 334,
+          "reference_characters": 247,
+          "cer": 1.3522267206477734,
+          "exact_lines": 0
+        },
+        "straightened_without_spaces_or_formatting": {
+          "lines": 9,
+          "scored_lines": 7,
+          "edits": 306,
+          "reference_characters": 236,
+          "cer": 1.2966101694915255,
+          "exact_lines": 0
+        },
+        "unscored_reasons": {
+          "The edition marks part of this line as unreadable.": 2
+        }
+      },
+      {
+        "identifier": "Tsum_0001_0009",
+        "document": "Ghee receipt",
+        "original": {
+          "lines": 2,
+          "scored_lines": 2,
+          "edits": 107,
+          "reference_characters": 128,
+          "cer": 0.8359375,
+          "exact_lines": 0
+        },
+        "straightened": {
+          "lines": 2,
+          "scored_lines": 2,
+          "edits": 115,
+          "reference_characters": 128,
+          "cer": 0.8984375,
+          "exact_lines": 0
+        },
+        "straightened_without_spaces_or_formatting": {
+          "lines": 2,
+          "scored_lines": 2,
+          "edits": 107,
+          "reference_characters": 127,
+          "cer": 0.84251968503937,
+          "exact_lines": 0
+        },
+        "unscored_reasons": {}
+      },
+      {
+        "identifier": "Tsum_0001_0019",
+        "document": "Fine and release",
+        "original": {
+          "lines": 6,
+          "scored_lines": 6,
+          "edits": 267,
+          "reference_characters": 232,
+          "cer": 1.1508620689655173,
+          "exact_lines": 0
+        },
+        "straightened": {
+          "lines": 6,
+          "scored_lines": 6,
+          "edits": 247,
+          "reference_characters": 232,
+          "cer": 1.0646551724137931,
+          "exact_lines": 0
+        },
+        "straightened_without_spaces_or_formatting": {
+          "lines": 6,
+          "scored_lines": 6,
+          "edits": 225,
+          "reference_characters": 229,
+          "cer": 0.982532751091703,
+          "exact_lines": 0
+        },
+        "unscored_reasons": {}
+      },
+      {
+        "identifier": "PD_0002_0001",
+        "document": "Kirtipur petition",
+        "original": {
+          "lines": 16,
+          "scored_lines": 16,
+          "edits": 664,
+          "reference_characters": 695,
+          "cer": 0.9553956834532374,
+          "exact_lines": 0
+        },
+        "straightened": {
+          "lines": 16,
+          "scored_lines": 16,
+          "edits": 660,
+          "reference_characters": 695,
+          "cer": 0.9496402877697842,
+          "exact_lines": 0
+        },
+        "straightened_without_spaces_or_formatting": {
+          "lines": 16,
+          "scored_lines": 16,
+          "edits": 533,
+          "reference_characters": 693,
+          "cer": 0.7691197691197691,
+          "exact_lines": 0
+        },
+        "unscored_reasons": {}
+      },
+      {
+        "identifier": "L_0922_0002",
+        "document": "Revenue contract",
+        "original": {
+          "lines": 48,
+          "scored_lines": 37,
+          "edits": 2327,
+          "reference_characters": 2600,
+          "cer": 0.895,
+          "exact_lines": 0
+        },
+        "straightened": {
+          "lines": 48,
+          "scored_lines": 37,
+          "edits": 2367,
+          "reference_characters": 2600,
+          "cer": 0.9103846153846153,
+          "exact_lines": 0
+        },
+        "straightened_without_spaces_or_formatting": {
+          "lines": 48,
+          "scored_lines": 37,
+          "edits": 2267,
+          "reference_characters": 2553,
+          "cer": 0.8879749314531923,
+          "exact_lines": 0
+        },
+        "unscored_reasons": {
+          "The seal overlaps the writing.": 5,
+          "The edition marks part of this line as unreadable.": 5,
+          "The seal and source watermark overlap the line.": 1
+        }
+      },
+      {
+        "identifier": "E_1448_0015",
+        "document": "Government loan",
+        "original": {
+          "lines": 29,
+          "scored_lines": 29,
+          "edits": 1547,
+          "reference_characters": 1565,
+          "cer": 0.9884984025559106,
+          "exact_lines": 0
+        },
+        "straightened": {
+          "lines": 29,
+          "scored_lines": 29,
+          "edits": 1544,
+          "reference_characters": 1565,
+          "cer": 0.9865814696485623,
+          "exact_lines": 0
+        },
+        "straightened_without_spaces_or_formatting": {
+          "lines": 29,
+          "scored_lines": 29,
+          "edits": 1518,
+          "reference_characters": 1565,
+          "cer": 0.9699680511182108,
+          "exact_lines": 0
+        },
+        "unscored_reasons": {}
+      }
+    ]
+  },
+  "manuscript_fine_tuning": {
+    "split": {
+      "manuscripts": {
+        "train": {
+          "Tsum_0001_0023": 6,
+          "Tsum_0001_0019": 6,
+          "L_0922_0002": 37,
+          "E_1448_0015": 29
+        },
+        "val": {
+          "PD_0002_0001": 16
+        },
+        "test": {
+          "LD_0001_0001": 14,
+          "Tsum_0001_0010": 7,
+          "Tsum_0001_0009": 2
+        }
+      },
+      "line_counts": {
+        "train": 78,
+        "val": 16,
+        "test": 23
+      },
+      "transcription_policy": "The evaluated diplomatic body text with its existing spacing and Unicode conventions.",
+      "appended_training_characters": {
+        "|": "U+007C",
+        "‍": "U+200D",
+        "∙": "U+2219"
+      },
+      "held_out_test_characters_outside_vocabulary": {
+        "•": 6
+      },
+      "test_lines_matching_synthetic_training_text_ignoring_spacing_and_formatting": 0,
+      "test_lines_matching_manuscript_training_text_ignoring_spacing_and_formatting": 0
+    },
+    "training_settings": {
+      "seed": 42,
+      "epochs": 24,
+      "hidden_size": 128,
+      "learning_rate": 0.0002,
+      "weight_decay": 0.0001,
+      "gradient_clip": 5.0,
+      "width_bucket_batches": 32,
+      "checkpoint_every_steps": 50,
+      "log_every_steps": 10
+    },
+    "batch_size": 8,
+    "vocabulary_size_including_blank": 101,
+    "validation_history": [
+      {
+        "epoch": 1,
+        "optimizer_steps": 10,
+        "training_ctc_loss": 7.7346170865572414,
+        "validation": {
+          "loss": 6.020289659500122,
+          "cer": 0.8446043165467626,
+          "edits": 587,
+          "reference_characters": 695,
+          "lines": 16
+        }
+      },
+      {
+        "epoch": 2,
+        "optimizer_steps": 20,
+        "training_ctc_loss": 6.343832370562431,
+        "validation": {
+          "loss": 5.0149571895599365,
+          "cer": 0.753956834532374,
+          "edits": 524,
+          "reference_characters": 695,
+          "lines": 16
+        }
+      },
+      {
+        "epoch": 3,
+        "optimizer_steps": 30,
+        "training_ctc_loss": 5.679104584913987,
+        "validation": {
+          "loss": 4.353048086166382,
+          "cer": 0.7323741007194244,
+          "edits": 509,
+          "reference_characters": 695,
+          "lines": 16
+        }
+      },
+      {
+        "epoch": 4,
+        "optimizer_steps": 40,
+        "training_ctc_loss": 4.97966586626493,
+        "validation": {
+          "loss": 3.9896953105926514,
+          "cer": 0.7194244604316546,
+          "edits": 500,
+          "reference_characters": 695,
+          "lines": 16
+        }
+      },
+      {
+        "epoch": 5,
+        "optimizer_steps": 50,
+        "training_ctc_loss": 4.3433329325455885,
+        "validation": {
+          "loss": 3.695752263069153,
+          "cer": 0.7309352517985611,
+          "edits": 508,
+          "reference_characters": 695,
+          "lines": 16
+        }
+      },
+      {
+        "epoch": 6,
+        "optimizer_steps": 60,
+        "training_ctc_loss": 4.043286464153192,
+        "validation": {
+          "loss": 3.4843822717666626,
+          "cer": 0.7323741007194244,
+          "edits": 509,
+          "reference_characters": 695,
+          "lines": 16
+        }
+      },
+      {
+        "epoch": 7,
+        "optimizer_steps": 70,
+        "training_ctc_loss": 3.6091849314860807,
+        "validation": {
+          "loss": 3.2497133016586304,
+          "cer": 0.7338129496402878,
+          "edits": 510,
+          "reference_characters": 695,
+          "lines": 16
+        }
+      },
+      {
+        "epoch": 8,
+        "optimizer_steps": 80,
+        "training_ctc_loss": 3.41573551373604,
+        "validation": {
+          "loss": 3.1408350467681885,
+          "cer": 0.7424460431654676,
+          "edits": 516,
+          "reference_characters": 695,
+          "lines": 16
+        }
+      },
+      {
+        "epoch": 9,
+        "optimizer_steps": 90,
+        "training_ctc_loss": 3.210233694467789,
+        "validation": {
+          "loss": 3.0122804641723633,
+          "cer": 0.720863309352518,
+          "edits": 501,
+          "reference_characters": 695,
+          "lines": 16
+        }
+      },
+      {
+        "epoch": 10,
+        "optimizer_steps": 100,
+        "training_ctc_loss": 3.1549642941890617,
+        "validation": {
+          "loss": 2.938114285469055,
+          "cer": 0.720863309352518,
+          "edits": 501,
+          "reference_characters": 695,
+          "lines": 16
+        }
+      },
+      {
+        "epoch": 11,
+        "optimizer_steps": 110,
+        "training_ctc_loss": 3.1979898856236386,
+        "validation": {
+          "loss": 2.856881856918335,
+          "cer": 0.7093525179856115,
+          "edits": 493,
+          "reference_characters": 695,
+          "lines": 16
+        }
+      },
+      {
+        "epoch": 12,
+        "optimizer_steps": 120,
+        "training_ctc_loss": 2.8651376443031507,
+        "validation": {
+          "loss": 2.8036404848098755,
+          "cer": 0.7079136690647482,
+          "edits": 492,
+          "reference_characters": 695,
+          "lines": 16
+        }
+      },
+      {
+        "epoch": 13,
+        "optimizer_steps": 130,
+        "training_ctc_loss": 2.8096342453589807,
+        "validation": {
+          "loss": 2.7617413997650146,
+          "cer": 0.7007194244604317,
+          "edits": 487,
+          "reference_characters": 695,
+          "lines": 16
+        }
+      },
+      {
+        "epoch": 14,
+        "optimizer_steps": 140,
+        "training_ctc_loss": 2.7095346511938634,
+        "validation": {
+          "loss": 2.721253275871277,
+          "cer": 0.6992805755395683,
+          "edits": 486,
+          "reference_characters": 695,
+          "lines": 16
+        }
+      },
+      {
+        "epoch": 15,
+        "optimizer_steps": 150,
+        "training_ctc_loss": 2.5949817253993106,
+        "validation": {
+          "loss": 2.662007451057434,
+          "cer": 0.6848920863309352,
+          "edits": 476,
+          "reference_characters": 695,
+          "lines": 16
+        }
+      },
+      {
+        "epoch": 16,
+        "optimizer_steps": 160,
+        "training_ctc_loss": 2.5268886945186515,
+        "validation": {
+          "loss": 2.6256603002548218,
+          "cer": 0.6762589928057554,
+          "edits": 470,
+          "reference_characters": 695,
+          "lines": 16
+        }
+      },
+      {
+        "epoch": 17,
+        "optimizer_steps": 170,
+        "training_ctc_loss": 2.4407842678901477,
+        "validation": {
+          "loss": 2.6168835163116455,
+          "cer": 0.6690647482014388,
+          "edits": 465,
+          "reference_characters": 695,
+          "lines": 16
+        }
+      },
+      {
+        "epoch": 18,
+        "optimizer_steps": 180,
+        "training_ctc_loss": 2.3512629851316795,
+        "validation": {
+          "loss": 2.5496538877487183,
+          "cer": 0.6561151079136691,
+          "edits": 456,
+          "reference_characters": 695,
+          "lines": 16
+        }
+      },
+      {
+        "epoch": 19,
+        "optimizer_steps": 190,
+        "training_ctc_loss": 2.6082905469796596,
+        "validation": {
+          "loss": 2.5651755332946777,
+          "cer": 0.6661870503597123,
+          "edits": 463,
+          "reference_characters": 695,
+          "lines": 16
+        }
+      },
+      {
+        "epoch": 20,
+        "optimizer_steps": 200,
+        "training_ctc_loss": 2.2346325318018594,
+        "validation": {
+          "loss": 2.50355064868927,
+          "cer": 0.6460431654676259,
+          "edits": 449,
+          "reference_characters": 695,
+          "lines": 16
+        }
+      },
+      {
+        "epoch": 21,
+        "optimizer_steps": 210,
+        "training_ctc_loss": 2.167535989712446,
+        "validation": {
+          "loss": 2.4734716415405273,
+          "cer": 0.6345323741007194,
+          "edits": 441,
+          "reference_characters": 695,
+          "lines": 16
+        }
+      },
+      {
+        "epoch": 22,
+        "optimizer_steps": 220,
+        "training_ctc_loss": 2.108600766230852,
+        "validation": {
+          "loss": 2.456008791923523,
+          "cer": 0.6302158273381295,
+          "edits": 438,
+          "reference_characters": 695,
+          "lines": 16
+        }
+      },
+      {
+        "epoch": 23,
+        "optimizer_steps": 230,
+        "training_ctc_loss": 2.0487689207761717,
+        "validation": {
+          "loss": 2.4445732831954956,
+          "cer": 0.6287769784172662,
+          "edits": 437,
+          "reference_characters": 695,
+          "lines": 16
+        }
+      },
+      {
+        "epoch": 24,
+        "optimizer_steps": 240,
+        "training_ctc_loss": 1.9980473518371582,
+        "validation": {
+          "loss": 2.4340906143188477,
+          "cer": 0.6273381294964029,
+          "edits": 436,
+          "reference_characters": 695,
+          "lines": 16
+        }
+      }
+    ],
+    "comparison": {
+      "best_epoch": 24,
+      "epochs_run": 24,
+      "validation_cer": {
+        "original": 0.9553956834532374,
+        "fine_tuned": 0.6273381294964029
+      },
+      "test": {
+        "original": {
+          "lines": 23,
+          "edits": 915,
+          "reference_characters": 1196,
+          "cer": 0.7650501672240803,
+          "exact_lines": 0
+        },
+        "fine_tuned": {
+          "lines": 23,
+          "edits": 822,
+          "reference_characters": 1196,
+          "cer": 0.6872909698996655,
+          "exact_lines": 0
+        }
+      },
+      "test_by_document": {
+        "LD_0001_0001": {
+          "original": {
+            "lines": 14,
+            "edits": 582,
+            "reference_characters": 821,
+            "cer": 0.7088915956151035,
+            "exact_lines": 0
+          },
+          "fine_tuned": {
+            "lines": 14,
+            "edits": 510,
+            "reference_characters": 821,
+            "cer": 0.6211936662606578,
+            "exact_lines": 0
+          }
+        },
+        "Tsum_0001_0010": {
+          "original": {
+            "lines": 7,
+            "edits": 226,
+            "reference_characters": 247,
+            "cer": 0.9149797570850202,
+            "exact_lines": 0
+          },
+          "fine_tuned": {
+            "lines": 7,
+            "edits": 213,
+            "reference_characters": 247,
+            "cer": 0.8623481781376519,
+            "exact_lines": 0
+          }
+        },
+        "Tsum_0001_0009": {
+          "original": {
+            "lines": 2,
+            "edits": 107,
+            "reference_characters": 128,
+            "cer": 0.8359375,
+            "exact_lines": 0
+          },
+          "fine_tuned": {
+            "lines": 2,
+            "edits": 99,
+            "reference_characters": 128,
+            "cer": 0.7734375,
+            "exact_lines": 0
+          }
+        }
+      },
+      "test_lines_fewer_edits": 18,
+      "test_lines_more_edits": 4,
+      "test_manifest_sha256": "07df053ba2172e6052d1aa89f261613a0e209f7d362f1dc5bd619410192c8698",
+      "checkpoint_sha256": {
+        "original": "8feca8159fa0185d692b2dc4cb6286b82b68f0dc332cac8d0197231369d526c5",
+        "fine_tuned": "86b594d7316a2af430071aea4ae8bdca8e7a91ad2de734de0bde007c47725013"
+      }
+    }
+  }
+}

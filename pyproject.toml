@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "mantra-htr"
 version = "0.1.0"
-description = "Synthetic Devanagari line generation and HTR data preparation"
+description = "Research tools for Devanagari manuscript segmentation and handwritten text recognition"
 requires-python = ">=3.10"
 dynamic = ["dependencies"]
 

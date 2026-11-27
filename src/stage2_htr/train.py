@@ -1,4 +1,4 @@
-"""Train and resume the MANTRA CRNN–CTC baseline on synthetic line images."""
+"""Train, fine-tune, and resume the MANTRA CRNN–CTC recognizer."""
 
 import argparse
 from contextlib import contextmanager
@@ -119,6 +119,34 @@ def write_metrics(path, payload):
     temporary.replace(path)
 
 
+def initialize_from_checkpoint(model, path, model_options, id_to_char):
+    """Load best weights, retaining initialized rows for newly appended characters."""
+    saved = torch.load(path, map_location="cpu", weights_only=True)
+    if saved.get("format_version") != CHECKPOINT_VERSION or "id_to_char" not in saved:
+        raise ValueError("--init-from expects a best.pt checkpoint")
+    source_options = saved["model_options"]
+    source_count = source_options["num_classes"]
+    if source_options != {**model_options, "num_classes": source_count}:
+        raise ValueError("Initial checkpoint and target model architectures differ")
+    source_chars = saved["id_to_char"]
+    if (set(source_chars) != set(range(source_count)) or source_count > model_options["num_classes"]
+            or any(id_to_char.get(index) != char for index, char in source_chars.items())):
+        raise ValueError("The target vocabulary must preserve all initial character IDs")
+
+    state = saved["model_state_dict"]
+    if source_count != model_options["num_classes"]:
+        state = dict(state)
+        target = model.state_dict()
+        for name in ("classifier.weight", "classifier.bias"):
+            existing_rows = target[name][:source_count]
+            if existing_rows.shape != state[name].shape:
+                raise ValueError("Initial checkpoint classifier dimensions differ from its vocabulary")
+            existing_rows.copy_(state[name])
+            state[name] = target[name]
+    model.load_state_dict(state, strict=True)
+    return file_sha256(path)
+
+
 def forward_loss(model, batch, device):
     images = batch["images"].to(device, non_blocking=device.type == "cuda")
     log_probs, lengths = model(images, batch["processed_widths"])
@@ -182,6 +210,7 @@ def run_training(args, settings, data_config, device):
                                   weight_decay=settings["weight_decay"])
     progress, history, best = Progress(), [], None
     output = args.output_dir
+    initial_checkpoint_sha256 = None
     if args.resume:
         latest = output / "last.pt"
         if latest.exists() and not latest.samefile(args.resume):
@@ -192,12 +221,16 @@ def run_training(args, settings, data_config, device):
         model.load_state_dict(saved["model_state_dict"])
         optimizer.load_state_dict(saved["optimizer_state_dict"])
         progress, history, best = Progress(**saved["progress"]), saved["history"], saved["best"]
+        initial_checkpoint_sha256 = saved.get("initial_checkpoint_sha256")
         torch.set_rng_state(saved["torch_rng_state"])
         if device.type == "cuda" and saved["cuda_rng_state"] is not None:
             torch.cuda.set_rng_state(saved["cuda_rng_state"], device)
         print(f"Resumed epoch {progress.epoch}, batch {progress.batches_done}, step {progress.step}", flush=True)
     elif any((output / name).exists() for name in ("last.pt", "best.pt", "metrics.json")):
         raise FileExistsError("Run outputs already exist. Use --resume or a new output directory.")
+    elif args.init_from:
+        initial_checkpoint_sha256 = initialize_from_checkpoint(model, args.init_from, model_options, train_data.id_to_char)
+        print(f"Initialized from {args.init_from} with a fresh optimizer", flush=True)
 
     descriptor = torch.cuda.get_device_name(device) if device.type == "cuda" else "CPU"
     print(f"Device: {descriptor}; train={line_counts['train']:,}; val={line_counts['val']:,}; batch={batch_size}",
@@ -225,7 +258,7 @@ def run_training(args, settings, data_config, device):
             save_torch(output / "best.pt", {
                 "format_version": CHECKPOINT_VERSION, "model_options": model_options,
                 "data_options": dataset_args, "id_to_char": train_data.id_to_char,
-                "data_sha256": hashes, **best,
+                "data_sha256": hashes, "initial_checkpoint_sha256": initial_checkpoint_sha256, **best,
             })
 
     def checkpoint(status, *, new_best=False):
@@ -233,6 +266,7 @@ def run_training(args, settings, data_config, device):
             "format_version": CHECKPOINT_VERSION, "contract": contract,
             "model_state_dict": model.state_dict(), "optimizer_state_dict": optimizer.state_dict(),
             "progress": asdict(progress), "history": history, "best": best,
+            "initial_checkpoint_sha256": initial_checkpoint_sha256,
             "torch_rng_state": torch.get_rng_state(),
             "cuda_rng_state": torch.cuda.get_rng_state(device) if device.type == "cuda" else None,
         })
@@ -243,6 +277,7 @@ def run_training(args, settings, data_config, device):
             "data_paths": {name: paths[name] for name in hashes},
             "device": descriptor, "torch_version": str(torch.__version__),
             "code_revision": os.environ.get("MANTRA_CODE_REVISION"),
+            "initial_checkpoint_sha256": initial_checkpoint_sha256,
             "num_workers": workers, "progress": asdict(progress), "epochs": history,
             "best": {key: best[key] for key in ("epoch", "validation_cer", "validation_loss")} if best else None,
             "invocation_seconds": round(time.monotonic() - started, 3),
@@ -315,7 +350,9 @@ def main(argv=None):
     parser.add_argument("--workers", type=int)
     parser.add_argument("--batch-size", type=int)
     parser.add_argument("--epochs", type=int)
-    parser.add_argument("--resume", type=Path)
+    starting_point = parser.add_mutually_exclusive_group()
+    starting_point.add_argument("--resume", type=Path, help="Continue an existing run from its last.pt")
+    starting_point.add_argument("--init-from", type=Path, help="Start a new run from a best.pt with a fresh optimizer")
     parser.add_argument("--max-steps", type=int, help="Pause at this total optimizer step")
     parser.add_argument("--time-limit-minutes", type=float, help="Pause training after this invocation budget")
     parser.add_argument("--train-limit", type=int, help="Use only the first N training lines for a smoke run")

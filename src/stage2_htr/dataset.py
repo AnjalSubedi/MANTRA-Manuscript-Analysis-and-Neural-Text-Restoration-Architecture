@@ -98,6 +98,9 @@ class HTRLineDataset(Dataset):
         Invert pixels so text is bright and the background is dark.
     project_root : str | None
         Base for project-relative image paths; defaults to the repository root.
+    encode_labels : bool
+        Encode CTC targets by default. Inference can keep references as text,
+        including characters outside the model vocabulary.
 
     Width-filtered rows are available in ``skipped_rows``. ``source_row_count``
     includes them, while ``len(dataset)`` counts only loadable-width rows.
@@ -113,6 +116,7 @@ class HTRLineDataset(Dataset):
         return_metadata: bool = True,
         invert_image: bool = False,
         project_root: str | None = None,
+        encode_labels: bool = True,
     ):
         super().__init__()
         self.image_height = image_height
@@ -120,6 +124,7 @@ class HTRLineDataset(Dataset):
         self.augment = augment
         self.return_metadata = return_metadata
         self.invert_image = invert_image
+        self.encode_labels = encode_labels
         self.project_root = Path(project_root) if project_root else Path(__file__).resolve().parents[2]
         if image_height <= 0 or (max_width is not None and max_width <= 0):
             raise ValueError("image_height and max_width must be positive")
@@ -140,7 +145,7 @@ class HTRLineDataset(Dataset):
         self.rows: list[dict[str, str]] = []
         self.skipped_rows: list[dict] = []
         self.source_row_count = 0
-        with open(manifest_csv, "r", encoding="utf-8") as f:
+        with open(manifest_csv, "r", encoding="utf-8-sig") as f:
             reader = csv.DictReader(f)
             for row in reader:
                 self.source_row_count += 1
@@ -208,7 +213,7 @@ class HTRLineDataset(Dataset):
             )
 
         # Label encoding ------------------------------------------------
-        label_ids = encode_text(text, self.char_to_id)
+        label_ids = encode_text(text, self.char_to_id) if self.encode_labels else []
         label_tensor = torch.tensor(label_ids, dtype=torch.long)
 
         sample = {
